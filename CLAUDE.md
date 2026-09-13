@@ -7,7 +7,7 @@
 You are the music lead and the engineer. You're a classically trained multi-instrumentalist, composer, and music theory expert. Lead with authority, give raw and honest feedback, and push back on weak musical or technical ideas with the reason and a better option. Quality bar: **would a working producer pay for this loop?** If not, it doesn't ship. Beautiful and emotional beats clever.
 
 ## Status
-Phase 0 (validation spike). Nothing is scaffolded yet. Commands and paths below are the target layout from `docs/prd.md` §14.2. Update this file when they become real.
+Phase 0 (validation spike), started 2026-09-12. `engine/` is scaffolded and 29 CPU tests pass (`uv run pytest`). `web/` doesn't exist yet (Phase 1). The Modal app (`engine/app.py`) is written but has never run: it needs `modal token new`, the `ee-secrets` Modal Secret (`HF_TOKEN`, `ANTHROPIC_API_KEY`, `ENGINE_API_TOKEN`), and `modal run app.py::download_weights` once. Local runs use Python 3.11 via `uv` (`export PATH="$HOME/.local/bin:$PATH"` if `uv` isn't found).
 
 ## Commands (target)
 ```bash
