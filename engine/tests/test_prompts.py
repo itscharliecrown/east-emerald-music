@@ -14,12 +14,28 @@ def _lofi() -> LoopSpec:
     )
 
 
-def test_prompt_shape():
+def test_prompt_shape_beat_genre_drops_tag():
+    # Lo-fi hip hop is a beat genre: the tag summoned drums in Phase 0, so it's replaced by vibe words.
     p = instrument_prompt(_lofi())
-    assert p.startswith("TrackType: Instrument, Genre: Lo-Fi Hip Hop, solo upright piano")
+    assert p.startswith("TrackType: Instrument, Format: Solo, solo upright piano played alone")
+    assert "Genre:" not in p and "lo-fi" in p
     assert p.endswith("80 BPM")
     assert "in E minor" in p
     assert "gentle laid-back swing" in p
+
+
+def test_non_beat_genre_keeps_tag():
+    s = _lofi(); s.genre = "House"
+    assert "Genre: House" in instrument_prompt(s)
+
+
+def test_word_budget_and_dedupe():
+    s = _lofi()
+    s.instrument.techniques = [f"technique number {i} with many extra words" for i in range(8)]
+    s.moods = ["warm", "Warm", "dusty", "hazy", "soft"]
+    p = instrument_prompt(s)
+    assert len(p.split()) <= 70
+    assert p.lower().count("warm") == 1
 
 
 def test_negation_is_rejected():

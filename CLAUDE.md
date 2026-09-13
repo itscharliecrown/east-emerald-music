@@ -7,7 +7,14 @@
 You are the music lead and the engineer. You're a classically trained multi-instrumentalist, composer, and music theory expert. Lead with authority, give raw and honest feedback, and push back on weak musical or technical ideas with the reason and a better option. Quality bar: **would a working producer pay for this loop?** If not, it doesn't ship. Beautiful and emotional beats clever.
 
 ## Status
-Phase 0 (validation spike), started 2026-09-12. `engine/` is scaffolded and 29 CPU tests pass (`uv run pytest`). `web/` doesn't exist yet (Phase 1). The Modal app (`engine/app.py`) is written but has never run: it needs `modal token new`, the `ee-secrets` Modal Secret (`HF_TOKEN`, `ANTHROPIC_API_KEY`, `ENGINE_API_TOKEN`), and `modal run app.py::download_weights` once. Local runs use Python 3.11 via `uv` (`export PATH="$HOME/.local/bin:$PATH"` if `uv` isn't found).
+Phase 0 passed 2026-09-13 (see `docs/phase0-report.md`: G1 71% usable, G2 91%, G3 67%). Phase 1 in progress. Working: Modal app deployed (`east-emerald-engine`), weights on volume, `intent.py` live (14–17 s), analysis + gates, bench + blind listening tools. Not yet: Rubber Band conform on Modal, SQLite/API routes, `web/`. Local runs use Python 3.11 via `uv` (`export PATH="$HOME/.local/bin:$PATH"` if `uv` isn't found); secrets live in `engine/.env.local` (gitignored) and the `ee-secrets` Modal Secret.
+
+## Phase 0 lessons (keep)
+- Beat genres (lo-fi, hip hop, chillhop, neo-soul, trap) as a `Genre:` tag summon drums. The compiler drops the tag and uses vibe words. Always `Format: Solo` + "played alone".
+- Prompts stay ≤ 70 words, ≤ 3 techniques / moods / chain items. The text encoder truncates.
+- Demucs files solo piano under "other" and guitar thumb bass under "bass". Purity = 1 − (drums + vocals [+ bass for keyboards]).
+- "Out of key at times" (8/48 clips) is within-clip harmonic wandering. No reliable metric yet. Composed mode is the fix.
+- Seed variance is large: 4 candidates per request minimum.
 
 ## Commands (target)
 ```bash
@@ -20,16 +27,16 @@ cd engine && uv run python -m engine.bench.run --suite core   # Phase 0 benchmar
 ```
 
 ## Architecture
-One Modal app, no other services. Frontend and backend deploy together.
+Backend is one Modal app. Frontend is a static Next.js export, hosted on Vercel (custom domain) and also servable by the Modal app. No database or auth services.
 ```
-Browser ──(HTTPS, bearer token)──▶ Modal: FastAPI (CPU) serves static Next.js + /v1/* ──spawn──▶ Engine class (GPU: L4)
-                                          │                                                       │
-                                   Volume "ee-data": SQLite db + loops/ raw/ midi/ uploads/ ◀─────┘
-                                   Volume "sa3-weights": Hugging Face cache
+Browser (Vercel static Next.js) ──(HTTPS + bearer token, CORS)──▶ Modal: FastAPI (CPU, max 1) /v1/* ──spawn──▶ Engine class (GPU: L4)
+                                                                        │                                        │
+                                                                 Volume "ee-data": SQLite + loops/ raw/ midi/ ◀──┘
+                                                                 Volume "sa3-weights": HF cache + torch hub
 ```
 **Pipeline:** Intent → (Compose) → Prompt compile → Generate → Analyze → Conform → Gate/Rank → Export.
 The model is one stage. **The conformance pipeline is the product.**
-Upgrade path only if multi-user: Supabase (Postgres, Storage, Auth) + Vercel. Not before.
+Upgrade path only if multi-user: Supabase (Postgres, Storage, Auth). Not before.
 
 | Module | Job |
 |---|---|

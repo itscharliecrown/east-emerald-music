@@ -75,7 +75,7 @@ These decisions are made. Each has a reason, and each can be reopened with evide
 | Write chord symbols in a Phase 1 prompt ("Em9 – Cmaj7") | Accept them, but **tell the user they aren't guaranteed until Composed mode (Phase 2).** | A text encoder can't enforce a chord sequence. Composed mode can, because the harmony comes from MIDI we write. |
 | Use MiniMax Music 3 instead of, or alongside, SA3 | **SA3 stays the core. MiniMax gets one blind test via fal.ai, never self-hosted.** | MiniMax is a full-song model: 32 kHz output, no stems, no audio-to-audio or inpainting, ~27 GB of weights needing 24 GB+ VRAM (the repo recommends two GPUs), and its license requires "MiniMax-Music3" displayed in the UI. Its one edge is an 8B language model composing the music, which may give more interesting harmony. If it wins the blind test on musicality, it becomes an optional "idea sketch" provider whose output still passes through stem extraction and every gate. See §14.5. |
 | A cheap or free VPS instead of Modal | **No VPS. Modal's Starter plan ($30/month of free compute, no card) covers Phase 0–1 GPU time.** | A CPU VPS can't run SA3 Medium (CUDA + Flash Attention required). The cheapest always-on 24 GB GPU is ~$195/mo (RunPod) or ~€184/mo (Hetzner GEX44). Our workload is bursty, so per-second serverless at ~35–40 GPU hours/month lands inside the free credit. Free notebook GPUs (Kaggle, Colab) are T4s, which lack Flash Attention 2. See §14.4–14.5. |
-| Next.js on Vercel + Supabase for a private tool | **One Modal app serves the API, the static frontend, and SQLite on a volume.** | Two fewer services, no row-level security, no proxy routes, $0. Supabase + Vercel return only when a second user is a written requirement (§18). |
+| Next.js on Vercel + Supabase for a private tool | **Static Next.js export on Vercel (custom domain, no server) talking straight to the Modal API. SQLite on a Modal volume. No Supabase.** | Charlie wants a domain and no `npm run dev`. A static export on Vercel is free, and the same build is also servable by the Modal app. Supabase returns only when a second user is a written requirement (§18). |
 | Use Fable 5.1 (the model we're planning with) at runtime | **Build with Fable. Run on `claude-opus-5`, configurable per route.** | Fable costs $10/$50 per million tokens vs $5/$25. Intent parsing 30 times a day doesn't need it. Composed mode can be promoted to Fable if the harmony eval shows a difference worth 2× the price. |
 
 ---
@@ -131,13 +131,13 @@ These decisions are made. Each has a reason, and each can be reopened with evide
 ## 6. Architecture
 
 ```
-┌────────────────────────── Browser ──────────────────────────┐
-│ Next.js static export · Web Audio gapless looper · wavesurfer│
-└──────────────┬──────────────────────────────────────────────┘
-               │ HTTPS + bearer token (ENGINE_API_TOKEN)
+┌──────────────── Browser ← Vercel (static Next.js export, custom domain) ────────────────┐
+│ Web Audio gapless looper · wavesurfer · genre/instrument/key/BPM controls                 │
+└──────────────┬──────────────────────────────────────────────────────────────────────────┘
+               │ HTTPS + bearer token (ENGINE_API_TOKEN), CORS limited to the Vercel domain
 ┌──────────────▼────────────── Modal (one app) ───────────────┐
 │ FastAPI web container (CPU, max 1)                           │
-│   serves engine/static/ (the frontend) and /v1/*             │
+│   /v1/* (also serves engine/static/ as a fallback UI)        │
 │   owns SQLite on volume "ee-data" (WAL mode)                 │
 │         │ .spawn()                                           │
 │         ▼                                                    │

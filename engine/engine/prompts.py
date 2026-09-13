@@ -39,6 +39,25 @@ _TEXTURE_PHRASE: dict[str, tuple[str, str, str]] = {
 }
 
 
+# SA3's T5Gemma encoder sees 256 tokens. Past that the prompt is silently truncated and the
+# BPM (last) is the first casualty. Budgets keep every prompt well inside the window.
+MAX_TECHNIQUES = 3
+MAX_MOODS = 3
+MAX_CHAIN = 3
+MAX_WORDS = 70
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        k = it.strip().lower()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(it.strip())
+    return out
+
+
 def _join(parts: list[str]) -> str:
     return ", ".join(p.strip() for p in parts if p and p.strip())
 
@@ -52,6 +71,8 @@ def _validate(prompt: str) -> str:
             raise ValueError(f"prompt contains hype word {word!r}: {prompt!r}")
     if not prompt.startswith("TrackType:"):
         raise ValueError("prompt must start with TrackType:")
+    if len(prompt.split()) > MAX_WORDS:
+        raise ValueError(f"prompt has {len(prompt.split())} words, budget is {MAX_WORDS}: {prompt!r}")
     return prompt
 
 
@@ -59,23 +80,51 @@ def key_phrase(spec: LoopSpec) -> str:
     return f"in {spec.key.tonic} {spec.key.mode}"
 
 
+# Genres whose tag summons a drum beat into a "solo" prompt. Phase 0 (2026-09-12): the lo-fi
+# piano item carried 49% drum energy and Charlie marked 3/4 clips "has drums, unusable"; every
+# other genre measured 0%. For these, the vibe is carried by descriptive words instead.
+_BEAT_GENRES = {"lo-fi hip hop", "lofi hip hop", "lo-fi", "lofi", "boom bap", "hip hop", "trap",
+                "trap soul", "chillhop", "jazz-hop", "jazzhop", "r&b", "neo-soul", "neo soul"}
+_GENRE_VIBE = {
+    "lo-fi hip hop": ["lo-fi", "dusty", "unquantized and human"],
+    "lofi hip hop": ["lo-fi", "dusty", "unquantized and human"],
+    "lo-fi": ["lo-fi", "dusty"], "lofi": ["lo-fi", "dusty"],
+    "boom bap": ["dusty", "sample-ready"],
+    "chillhop": ["mellow", "sample-ready"], "jazz-hop": ["jazzy", "sample-ready"], "jazzhop": ["jazzy", "sample-ready"],
+    "trap": ["dark", "sparse"], "trap soul": ["smooth", "sparse"],
+    "r&b": ["smooth", "soulful"], "neo-soul": ["soulful", "smooth"], "neo soul": ["soulful", "smooth"],
+}
+
+
+def genre_parts(spec: LoopSpec) -> tuple[str, list[str]]:
+    """(genre tag or '', extra vibe words). Beat genres drop the tag."""
+    g = spec.genre.strip().lower()
+    if g in _BEAT_GENRES:
+        return "", _GENRE_VIBE.get(g, [g])
+    return f"Genre: {spec.genre}", []
+
+
 def instrument_prompt(spec: LoopSpec, variant: Variant | None = None) -> str:
     inst = spec.instrument
     # Variants ADD to the base description; they never drop the musical instruction.
-    techniques = list(inst.techniques) + (variant.techniques if variant else [])
-    chain = variant.chain if variant and variant.chain else spec.production.chain
-    moods = [variant.mood_override] if variant and variant.mood_override else spec.moods
+    # Order matters under the caps: the variant's own words come first, then the base.
+    techniques = _dedupe((variant.techniques if variant else []) + list(inst.techniques))[:MAX_TECHNIQUES]
+    chain = _dedupe(variant.chain if variant and variant.chain else spec.production.chain)[:MAX_CHAIN]
+    moods = [variant.mood_override] if variant and variant.mood_override else list(spec.moods)
+    genre_tag, vibe = genre_parts(spec)
+    moods = _dedupe(vibe[:1] + moods)[:MAX_MOODS]
 
     body = _join([
-        f"solo {_TYPE_PHRASE.get(inst.type, inst.type.replace('_', ' '))}",
-        " and ".join(techniques) if techniques else "",
+        f"solo {_TYPE_PHRASE.get(inst.type, inst.type.replace('_', ' '))} played alone",
+        ", ".join(techniques) if techniques else "",
     ])
     parts = [
         "TrackType: Instrument",
-        f"Genre: {spec.genre}",
+        "Format: Solo",
+        genre_tag,
         f"{body} {key_phrase(spec)}",
         _feel_phrase(spec),
-        " and ".join(moods) if moods else "",
+        ", ".join(moods) if moods else "",
         _join(chain),
         spec.production.space,
         f"{int(round(spec.bpm))} BPM",

@@ -1,7 +1,11 @@
 # Phase 0 Report: Validation Spike
 
 Date: 2026-09-12 · Provider: SA3 Medium on Modal L4 · Suite: `core` (12 items × 4 variants = 48 clips)
-Status: **machine gates measured, listening gates (G1) awaiting Charlie's ears.**
+Status: **PASSED 2026-09-13.** G1 scored by Charlie's blind listening: 34/48 usable at ≥ 4/5 (71%, target 50%), mean tone 4.19, mean usable 3.75.
+
+Per item (mean tone / interest / usable): lo-fi upright 4.8/4.8/2.0 (drums in 3 of 4), felt cinematic 3.8/3.5/3.8, Rhodes 3.5/3.5/3.5, grand ballad 3.5/3.5/3.5, Wurli 4.2/3.8/4.0, house piano 3.8/3.8/3.5, steel fingerstyle 4.2/3.5/4.0, nylon bossa 4.5/4.2/4.5, clean electric neo-soul 4.8/4.5/4.8, archtop 4.2/4.2/4.2, folk 6/8 4.5/4.5/4.2, ambient swells 4.5/3.2/3.0 ("not a composition").
+
+Listening notes confirmed: drums in the lo-fi item (Demucs was right), guitar "bass" was thumb bass (Demucs was wrong), 8 clips "out of key at times" (harmonic wandering), one house loop "incomplete" (window cut). Fixes shipped: beat-genre tag rule, purity by family, prompt word budget. Named copies with scores: `engine/bench/out/core/reveal/`.
 
 ## 1. What ran
 - `modal run app.py::download_weights` (10.4 GB into the `sa3-weights` volume, one time)
