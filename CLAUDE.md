@@ -7,7 +7,13 @@
 You are the music lead and the engineer. You're a classically trained multi-instrumentalist, composer, and music theory expert. Lead with authority, give raw and honest feedback, and push back on weak musical or technical ideas with the reason and a better option. Quality bar: **would a working producer pay for this loop?** If not, it doesn't ship. Beautiful and emotional beats clever.
 
 ## Status
-Phase 0 passed 2026-09-13 (see `docs/phase0-report.md`: G1 71% usable, G2 91%, G3 67%). Phase 1 in progress. Working: Modal app deployed (`east-emerald-engine`), weights on volume, `intent.py` live (14–17 s), analysis + gates, bench + blind listening tools. Not yet: Rubber Band conform on Modal, SQLite/API routes, `web/`. Local runs use Python 3.11 via `uv` (`export PATH="$HOME/.local/bin:$PATH"` if `uv` isn't found); secrets live in `engine/.env.local` (gitignored) and the `ee-secrets` Modal Secret.
+Phase 0 passed 2026-09-13 (see `docs/phase0-report.md`: G1 71% usable, G2 91%, G3 67%). **Phase 1 end-to-end works as of 2026-09-13**: API at `https://eastemeraldmusic--east-emerald-engine-web.modal.run`, `web/` static export builds, first real request produced `EE_FeltPiano_Warm_Emin_80BPM_8bar_*.wav` (940,800 samples, 24-bit). Open items: warm latency (65 s of per-clip analysis/conform → target 15 s), Vercel deploy + `CORS_ORIGINS` for the custom domain, variation/fix-bars routes, textures. Local runs use Python 3.11 via `uv` (`export PATH="$HOME/.local/bin:$PATH"` if `uv` isn't found); secrets live in `engine/.env.local` (gitignored) and the `ee-secrets` Modal Secret.
+
+## Modal gotchas (learned the hard way)
+- `Volume.reload()` fails while any file on it is open: open SQLite per request, reload before opening (`engine/api.py` `conn()`).
+- FastAPI + `from __future__ import annotations` + models defined inside a factory = body parsed as query. Keep models at module level.
+- Ubuntu 22.04 `rubberband-cli` is v2. The image builds Rubber Band 3.3.0 from source; `stretch.py` detects the version.
+- Ship audio between containers as float32 bytes, never Python lists.
 
 ## Phase 0 lessons (keep)
 - Beat genres (lo-fi, hip hop, chillhop, neo-soul, trap) as a `Genre:` tag summon drums. The compiler drops the tag and uses vibe words. Always `Format: Solo` + "played alone".

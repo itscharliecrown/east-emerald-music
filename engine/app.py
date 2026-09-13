@@ -29,7 +29,16 @@ secrets = [modal.Secret.from_name("ee-secrets")]
 
 image = (
     modal.Image.from_registry("nvidia/cuda:12.6.3-devel-ubuntu22.04", add_python="3.11")
-    .apt_install("git", "ffmpeg", "rubberband-cli", "fluidsynth", "libsndfile1")
+    .apt_install("git", "ffmpeg", "fluidsynth", "libsndfile1", "libsndfile1-dev", "libsamplerate0-dev",
+                 "libfftw3-dev", "meson", "ninja-build", "pkg-config", "wget", "bzip2")
+    # Ubuntu 22.04 ships Rubber Band 2 (no R3 engine). Build 3.3.0 from source (~1 min).
+    .run_commands(
+        "cd /tmp && wget -q https://breakfastquay.com/files/releases/rubberband-3.3.0.tar.bz2"
+        " && tar xf rubberband-3.3.0.tar.bz2 && cd rubberband-3.3.0"
+        " && meson setup build -Ddefault_library=static -Dfft=fftw -Dresampler=libsamplerate"
+        " -Djni=disabled -Dladspa=disabled -Dlv2=disabled -Dvamp=disabled -Dtests=disabled"
+        " && ninja -C build && ninja -C build install && ldconfig && rubberband --version"
+    )
     .pip_install("torch==2.7.1", "torchaudio==2.7.1", index_url="https://download.pytorch.org/whl/cu126")
     .pip_install("packaging", "ninja", "wheel")
     .pip_install(FLASH_ATTN_WHL)   # a broken install produces static; the selftest catches it
@@ -39,6 +48,7 @@ image = (
         "git+https://github.com/CPJKU/beat_this.git", "demucs", "fastapi[standard]", "anthropic",
     )
     .env({"HF_HOME": HF_CACHE, "HF_HUB_ENABLE_HF_TRANSFER": "0", "TORCH_HOME": f"{HF_CACHE}/torch"})
+    .add_local_dir("migrations", remote_path="/root/migrations")
     .add_local_python_source("engine")
 )
 
@@ -132,6 +142,38 @@ class Engine:
         ]
 
     @modal.method()
+    def ping(self) -> bool:
+        return True
+
+    @modal.method()
+    def run_job(self, request_id: str, text: str, overrides: dict, mode: str, parent: dict | None,
+                candidates: int = 4) -> dict:
+        """Whole request on this container: intent → generate → analyze → conform → export → job file."""
+        from pathlib import Path
+
+        from engine.generate.base import RawClip
+        from engine.job import run_request
+
+        engine = self
+
+        class InProcess:
+            name = "sa3-medium-modal"
+
+            def generate(self_, req):
+                import secrets as _s
+                seeds = req.seeds or [_s.randbits(31) for _ in req.prompts]
+                t0 = time.time()
+                outs = engine._run(req.prompts, req.duration_s, seeds, req.steps)
+                per = (time.time() - t0) / len(req.prompts)
+                return [RawClip(audio=o, sr=44100, prompt=p, seed=s, provider=self_.name,
+                                model_revision=engine.revision, duration_s=req.duration_s, steps=req.steps,
+                                gen_seconds=per) for o, p, s in zip(outs, req.prompts, seeds)]
+
+        return run_request(request_id=request_id, text=text, overrides=overrides, mode=mode, parent=parent,
+                           generator=InProcess(), data_root=Path(DATA), candidates=candidates,
+                           commit=data_vol.commit)
+
+    @modal.method()
     def analyze_gpu(self, audio: bytes, shape: list[int], sr: int, target_bpm: float | None,
                     rhythmic: bool = True, family: str = "piano") -> dict:
         """GPU-side analysis: beat_this tempo/downbeats + Demucs stem purity. Laptop never needs torch."""
@@ -147,6 +189,23 @@ class Engine:
         d["extra"] = {"stem_shares": shares, "purity": purity_for(shares, family),
                       "vocal_share": shares.get("vocals", 0.0)}
         return d
+
+
+@app.function(volumes={DATA: data_vol}, max_containers=1, scaledown_window=300, timeout=3600)
+@modal.concurrent(max_inputs=32)
+@modal.asgi_app()
+def web():
+    from pathlib import Path
+
+    from engine.api import build_app
+
+    def spawn_job(rid, text, overrides, mode, parent, candidates):
+        Engine().run_job.spawn(rid, text, overrides, mode, parent, candidates)
+
+    def wake():
+        Engine().ping.spawn()
+
+    return build_app(data_root=Path(DATA), spawn_job=spawn_job, wake=wake, reload_volume=data_vol.reload)
 
 
 @app.local_entrypoint()

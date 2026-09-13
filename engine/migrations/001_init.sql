@@ -1,0 +1,66 @@
+create table if not exists requests (
+  id              text primary key,
+  created_at      text not null default (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  completed_at    text,
+  mode            text not null check (mode in ('prompt','composed','reskin','variation','fix')),
+  raw_text        text not null,
+  overrides       text not null default '{}',
+  spec            text,
+  parent_loop_id  text,
+  status          text not null default 'queued'
+                  check (status in ('queued','parsing','composing','generating','conforming','done','failed')),
+  error           text,
+  llm_model       text,
+  llm_usage       text,
+  gpu_seconds     real,
+  batches_run     integer not null default 0
+);
+
+create table if not exists loops (
+  id                 text primary key,
+  request_id         text not null references requests (id) on delete cascade,
+  created_at         text not null default (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  candidate_index    integer not null,
+  status             text not null check (status in ('passed','rejected')),
+  reject_reasons     text not null default '[]',
+  category           text not null check (category in ('instrument','texture','one_shot')),
+  instrument_family  text,
+  instrument_type    text,
+  genre              text,
+  moods              text not null default '[]',
+  key_tonic          text,
+  key_mode           text,
+  bpm                real,
+  time_signature     text not null default '4/4',
+  bars               integer check (bars in (4, 8)),
+  length_samples     integer,
+  filename           text,
+  provider           text not null,
+  model_revision     text not null,
+  gen_prompt         text not null,
+  seed               integer,
+  steps              integer,
+  duration_s         real,
+  init_noise_level   real,
+  init_audio_sha256  text,
+  lora               text,
+  analysis_raw       text,
+  conform_ops        text,
+  analysis_final     text,
+  score              real,
+  wav_path           text,
+  raw_path           text,
+  midi_path          text,
+  preview_path       text,
+  peaks              text,
+  files_purged_at    text,
+  kept               integer,
+  stars              integer check (stars between 1 and 5),
+  favorite           integer not null default 0,
+  used_in_track      text,
+  notes              text
+);
+
+create index if not exists loops_library_idx on loops (status, kept, instrument_family, key_tonic, key_mode, bpm);
+create index if not exists loops_request_idx on loops (request_id);
+create index if not exists requests_created_idx on requests (created_at desc);

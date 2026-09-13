@@ -19,6 +19,21 @@ def rubberband_available() -> bool:
     return shutil.which("rubberband") is not None
 
 
+_VERSION: int | None = None
+
+
+def rubberband_major() -> int:
+    """3 for the R3 engine (`-3 --fine`), 2 for the legacy CLI (`-c 6`). Cached."""
+    global _VERSION
+    if _VERSION is None:
+        out = subprocess.run(["rubberband", "--version"], capture_output=True, text=True)
+        text = (out.stdout or "") + (out.stderr or "")
+        import re
+        m = re.search(r"(\d+)\.\d+", text)
+        _VERSION = int(m.group(1)) if m else 2
+    return _VERSION
+
+
 def rubberband(
     x: np.ndarray,
     sr: int,
@@ -34,13 +49,8 @@ def rubberband(
     with tempfile.TemporaryDirectory() as d:
         src, dst = Path(d) / "in.wav", Path(d) / "out.wav"
         sf.write(src, x.T if x.ndim == 2 else x, sr, subtype="FLOAT")
-        cmd = [
-            "rubberband", "-3", "--fine",      # R3 engine
-            "--pitch-hq",
-            "--time", f"{time_ratio:.6f}",
-            "--pitch", f"{semitones:.4f}",
-            str(src), str(dst),
-        ]
+        quality = ["-3", "--fine", "--pitch-hq"] if rubberband_major() >= 3 else ["-c", "6", "--pitch-hq"]
+        cmd = ["rubberband", *quality, "--time", f"{time_ratio:.6f}", "--pitch", f"{semitones:.4f}", str(src), str(dst)]
         subprocess.run(cmd, check=True, capture_output=True)
         y, _ = sf.read(dst, dtype="float32", always_2d=True)
     return y.T
