@@ -38,7 +38,7 @@ image = (
         "scipy", "soundfile", "librosa", "pyloudnorm", "pydantic>=2.7", "pyyaml",
         "git+https://github.com/CPJKU/beat_this.git", "demucs", "fastapi[standard]", "anthropic",
     )
-    .env({"HF_HOME": HF_CACHE, "HF_HUB_ENABLE_HF_TRANSFER": "0"})
+    .env({"HF_HOME": HF_CACHE, "HF_HUB_ENABLE_HF_TRANSFER": "0", "TORCH_HOME": f"{HF_CACHE}/torch"})
     .add_local_python_source("engine")
 )
 
@@ -124,42 +124,46 @@ class Engine:
         t0 = time.time()
         outs = self._run(prompts, duration_s, seeds, steps, **kw)
         per = (time.time() - t0) / len(prompts)
+        # Raw float32 bytes: ~10× faster to ship than nested Python lists.
         return [
-            {"audio": o.tolist(), "sr": 44100, "prompt": p, "seed": s,
-             "model_revision": self.revision, "gen_seconds": per}
+            {"audio": o.astype("float32").tobytes(), "shape": list(o.shape), "sr": 44100, "prompt": p,
+             "seed": s, "model_revision": self.revision, "gen_seconds": per}
             for o, p, s in zip(outs, prompts, seeds)
         ]
 
     @modal.method()
-    def analyze_gpu(self, audio: list, sr: int, target_bpm: float | None) -> dict:
-        """GPU-side analysis (beat_this + demucs) so the laptop never needs torch."""
+    def analyze_gpu(self, audio: bytes, shape: list[int], sr: int, target_bpm: float | None,
+                    rhythmic: bool = True, family: str = "piano") -> dict:
+        """GPU-side analysis: beat_this tempo/downbeats + Demucs stem purity. Laptop never needs torch."""
         import numpy as np
 
         from engine.analyze import analyze
-        from engine.analyze.purity import stem_shares
+        from engine.analyze.purity import purity_for, stem_shares
 
-        x = np.asarray(audio, dtype="float32")
-        a = analyze(x, sr, target_bpm=target_bpm)
+        x = np.frombuffer(audio, dtype="float32").reshape(shape)
+        a = analyze(x, sr, target_bpm=target_bpm, rhythmic=rhythmic)
         shares = stem_shares(x, sr)
         d = a.to_dict()
-        d["stem_shares"] = shares
+        d["extra"] = {"stem_shares": shares, "purity": purity_for(shares, family),
+                      "vocal_share": shares.get("vocals", 0.0)}
         return d
 
 
-@app.function(gpu="L4", volumes={HF_CACHE: weights_vol}, timeout=900)
-def selftest():
-    """Smoke test: load + 2 s generation + timing of a real 8-bar batch."""
-    e = Engine()
-    e.load()
-    t0 = time.time()
-    out = e.generate.local(
-        ["TrackType: Instrument, Genre: Lo-Fi Hip Hop, solo upright piano playing soft jazzy chords in E minor, "
-         "felt-muted hammers, warm and nostalgic, close-miked through cassette tape saturation, 80 BPM"] * 4,
-        duration_s=30.0,
-    )
-    print(f"4 × 30 s in {time.time() - t0:.1f}s; per clip {out[0]['gen_seconds']:.2f}s")
-
-
 @app.local_entrypoint()
-def main():
-    selftest.remote()
+def selftest():
+    """Smoke test: cold start (load + flash-attn check) then a timed 4 × 30 s batch, saved locally."""
+    import numpy as np
+    import soundfile as sf
+
+    prompt = ("TrackType: Instrument, Genre: Lo-Fi Hip Hop, solo upright piano playing soft jazzy chords "
+              "in E minor, felt-muted hammers, warm and nostalgic, close-miked through cassette tape "
+              "saturation, 80 BPM")
+    t0 = time.time()
+    out = Engine().generate.remote([prompt] * 4, duration_s=30.0)
+    wall = time.time() - t0
+    os.makedirs("bench/out/selftest", exist_ok=True)
+    for i, c in enumerate(out):
+        audio = np.frombuffer(c["audio"], dtype="float32").reshape(c["shape"])
+        sf.write(f"bench/out/selftest/{i}.wav", audio.T, c["sr"], subtype="PCM_24")
+    print(f"cold call: 4 × 30 s in {wall:.1f}s wall (incl. container start); "
+          f"per clip {out[0]['gen_seconds']:.2f}s; saved bench/out/selftest/*.wav")

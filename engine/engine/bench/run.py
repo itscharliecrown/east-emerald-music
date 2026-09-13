@@ -20,7 +20,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from engine.analyze import analyze
+from engine.analyze import Analysis, analyze, clipping_runs, silent_bars
 from engine.conform.level import normalize_level
 from engine.conform.window import cut_loop, find_loop_window
 from engine.export import write_wav24
@@ -56,7 +56,7 @@ def make_provider(name: str):
     raise SystemExit(f"unknown provider {name}")
 
 
-def run_item(spec: LoopSpec, provider, out_dir: Path, candidates: int) -> list[dict]:
+def run_item(spec: LoopSpec, provider, out_dir: Path, candidates: int, gpu_analysis: bool) -> list[dict]:
     prompts = compile_prompts(spec)[:candidates]
     req = GenerateRequest(prompts=prompts, duration_s=spec.generate_seconds)
     t0 = time.time()
@@ -66,27 +66,39 @@ def run_item(spec: LoopSpec, provider, out_dir: Path, candidates: int) -> list[d
     for k, clip in enumerate(clips):
         raw_path = out_dir / f"{k}_raw.wav"
         write_wav24(raw_path, clip.audio, clip.sr)
-        a = analyze(clip.audio, clip.sr, target_bpm=spec.bpm,
-                    bar_samples=int(round(spec.bar_seconds * clip.sr)), rhythmic=spec.feel.rhythmic)
-        g = evaluate(spec, a)
+        # Tempo/key/tuning are measured on the raw clip (more context for the trackers).
+        t1 = time.time()
+        if gpu_analysis and hasattr(provider, "analyze"):
+            a = Analysis.from_dict(provider.analyze(
+                clip.audio, clip.sr, target_bpm=spec.bpm, rhythmic=spec.feel.rhythmic,
+                family=spec.instrument.family))
+        else:
+            a = analyze(clip.audio, clip.sr, target_bpm=spec.bpm, rhythmic=spec.feel.rhythmic)
+        purity = a.extra.get("purity"); vocal = a.extra.get("vocal_share")
         row = {
             "item": spec.__dict__.get("_id"), "k": k, "provider": clip.provider, "prompt": clip.prompt,
             "seed": clip.seed, "gen_seconds": clip.gen_seconds, "gen_wall_batch": gen_wall,
-            "analysis": a.to_dict(), "gate": asdict(g), "raw": str(raw_path),
+            "analysis_seconds": time.time() - t1, "analysis": a.to_dict(), "raw": str(raw_path),
         }
-        # Best-effort conformed cut (no stretch here; Phase 0 measures, Phase 1 corrects).
+        # Best-effort cut (no stretch here; Phase 0 measures, Phase 1 corrects). Silence and
+        # clipping are judged on the cut loop: the raw tail is allowed to decay to nothing.
         try:
             mono = clip.audio.mean(axis=0)
             w = find_loop_window(mono, clip.sr, loop_samples=spec.loop_samples, bars=spec.bars,
                                  downbeats_s=a.tempo.downbeats)
             loop = cut_loop(clip.audio, clip.sr, start=w.start_sample, loop_samples=spec.loop_samples)
             loop, lvl = normalize_level(loop, clip.sr)
+            a.silent_bars = silent_bars(loop, int(round(spec.bar_seconds * clip.sr)))
+            a.clipping_runs = clipping_runs(loop)
             loop_path = out_dir / f"{k}_loop.wav"
             write_wav24(loop_path, loop, clip.sr)
-            row.update({"loop": str(loop_path), "window": asdict(w), "level": lvl,
-                        "score": rank_score(a, g, spec, seam_score=w.seam_score)})
+            g = evaluate(spec, a, purity=purity, vocal_share=vocal)
+            row.update({"loop": str(loop_path), "window": asdict(w), "level": lvl, "gate": asdict(g),
+                        "score": rank_score(a, g, spec, seam_score=w.seam_score, purity=purity)})
         except Exception as e:  # noqa: BLE001
-            row.update({"loop": None, "window_error": str(e)})
+            g = evaluate(spec, a, purity=purity, vocal_share=vocal)
+            g.reasons.append("no_loop_window"); g.passed = False
+            row.update({"loop": None, "window_error": str(e), "gate": asdict(g)})
         rows.append(row)
     return rows
 
@@ -97,6 +109,7 @@ def main():
     ap.add_argument("--provider", default="sa3-fal")
     ap.add_argument("--only", nargs="*", help="item ids")
     ap.add_argument("--candidates", type=int, default=None)
+    ap.add_argument("--cpu-analysis", action="store_true", help="librosa instead of beat_this/Demucs on GPU")
     args = ap.parse_args()
 
     data, specs = load_suite(args.suite)
@@ -107,8 +120,8 @@ def main():
     results = out_root / "results.jsonl"
 
     table = Table(title=f"{args.suite} / {args.provider}")
-    for col in ("item", "k", "bpm req", "bpm got", "err%", "drift", "key req", "key got", "str", "gate", "gen s"):
-        table.add_column(col)
+    for col in ("item", "k", "bpm", "got", "err%", "drift", "key", "got", "str", "pur", "gate"):
+        table.add_column(col, overflow="fold")
 
     with results.open("a") as f:
         for spec in specs:
@@ -116,7 +129,7 @@ def main():
             if args.only and sid not in args.only:
                 continue
             console.print(f"[bold]{sid}[/] {spec.generate_seconds}s × {candidates}")
-            rows = run_item(spec, provider, out_root / sid, candidates)
+            rows = run_item(spec, provider, out_root / sid, candidates, gpu_analysis=not args.cpu_analysis)
             for r in rows:
                 f.write(json.dumps(r) + "\n")
                 a, g = r["analysis"], r["gate"]
@@ -124,7 +137,8 @@ def main():
                     sid, str(r["k"]), f"{spec.bpm:.0f}", f"{a['tempo']['bpm']:.1f}",
                     f"{abs(a['tempo']['bpm'] - spec.bpm) / spec.bpm * 100:.1f}", f"{a['tempo']['drift_cv']:.3f}",
                     spec.key.label(), f"{a['key']['tonic']}{a['key']['mode'][:3]}", f"{a['key']['strength']:.2f}",
-                    "PASS" if g["passed"] else ",".join(g["reasons"]), f"{r['gen_seconds']:.1f}",
+                    f"{a.get('extra', {}).get('purity', float('nan')):.2f}",
+                    "PASS" if g["passed"] else ",".join(g["reasons"]),
                 )
     console.print(table)
     console.print(f"results → {results}")

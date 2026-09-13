@@ -61,7 +61,8 @@ def key_phrase(spec: LoopSpec) -> str:
 
 def instrument_prompt(spec: LoopSpec, variant: Variant | None = None) -> str:
     inst = spec.instrument
-    techniques = (variant.techniques if variant and variant.techniques else inst.techniques)
+    # Variants ADD to the base description; they never drop the musical instruction.
+    techniques = list(inst.techniques) + (variant.techniques if variant else [])
     chain = variant.chain if variant and variant.chain else spec.production.chain
     moods = [variant.mood_override] if variant and variant.mood_override else spec.moods
 

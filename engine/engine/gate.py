@@ -12,7 +12,9 @@ from engine.spec import PITCH_CLASS, LoopSpec
 @dataclass
 class Thresholds:
     tempo_error_pct: float = 6.0
-    tempo_drift_cv: float = 0.03
+    # Phase 0 calibration: fingerstyle guitar that a human hears as steady measures 0.04–0.08
+    # with the librosa tracker. 0.03 rejected every good guitar take. Re-tune with beat_this.
+    tempo_drift_cv: float = 0.08
     key_max_semitones: int = 2
     key_min_strength: float = 0.6
     stem_min_purity: float = 0.70
@@ -38,7 +40,9 @@ def evaluate(spec: LoopSpec, a: Analysis, *, t: Thresholds = Thresholds(), purit
     if a.silent_bars > 0:
         r.reasons.append("silence")
     if a.clipping_runs > 0:
-        r.reasons.append("clipping")
+        # Warning until calibrated by ear: driven Wurlitzer / compressed house piano may be
+        # legitimately flat-topped by the model's "saturation" rendering (Phase 0, 2026-09-12).
+        r.warnings.append("clipping")
 
     if spec.feel.rhythmic and a.tempo.bpm > 0:
         err = a.tempo.error_pct(spec.bpm)

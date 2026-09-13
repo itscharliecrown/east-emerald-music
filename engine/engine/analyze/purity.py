@@ -29,5 +29,11 @@ def stem_shares(x: np.ndarray, sr: int, model_name: str = "htdemucs_6s") -> dict
 
 
 def purity_for(shares: dict[str, float], family: str) -> float:
-    key = {"piano": "piano", "keys": "piano", "guitar": "guitar"}.get(family, "other")
-    return shares.get(key, 0.0)
+    """Share of energy that is NOT foreign material (drums, bass, vocals).
+
+    Phase 0 calibration (2026-09-12): htdemucs_6s files most solo piano under "other" (piano
+    stem 0.23–0.67 on clips with zero drums), so "requested stem share" punished clean takes.
+    Bleed from drums/bass/vocals is the signal that matters for a solo instrument loop.
+    """
+    foreign = shares.get("drums", 0.0) + shares.get("bass", 0.0) + shares.get("vocals", 0.0)
+    return max(0.0, 1.0 - foreign)

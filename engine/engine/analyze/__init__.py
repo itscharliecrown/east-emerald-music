@@ -27,8 +27,20 @@ class Analysis:
     extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        d = asdict(self)
-        return d
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Analysis":
+        return cls(
+            tempo=TempoEstimate(**d["tempo"]),
+            key=KeyEstimate(**d["key"]),
+            tuning_cents=d["tuning_cents"],
+            loudness=LoudnessInfo(**d["loudness"]),
+            stereo_correlation=d["stereo_correlation"],
+            clipping_runs=d["clipping_runs"],
+            silent_bars=d["silent_bars"],
+            extra=d.get("extra", {}),
+        )
 
 
 def to_mono(x: np.ndarray) -> np.ndarray:
@@ -44,13 +56,20 @@ def stereo_correlation(x: np.ndarray) -> float:
     return float(np.corrcoef(l, r)[0, 1])
 
 
-def clipping_runs(x: np.ndarray, threshold: float = 0.99, min_run: int = 4) -> int:
-    """Count runs of >= min_run consecutive samples at |x| >= threshold (PRD §7.7)."""
-    flat = (np.abs(x) >= threshold)
-    if flat.ndim == 2:
-        flat = flat.any(axis=0)
+def clipping_runs(x: np.ndarray, threshold: float = 0.95, min_run: int = 4) -> int:
+    """Count flat-topped runs: >= min_run consecutive near-identical samples at |x| >= threshold.
+
+    Float audio above 1.0 is loud, not clipped. Clipping is a flat top, so we require the
+    sample-to-sample difference to vanish as well (PRD §7.7).
+    """
+    mono = x if x.ndim == 1 else x
+    hot = np.abs(mono) >= threshold * np.max(np.abs(mono))
+    flat = np.abs(np.diff(mono, axis=-1)) < 1e-4
+    both = hot[..., 1:] & flat
+    if both.ndim == 2:
+        both = both.any(axis=0)
     runs, count = 0, 0
-    for v in flat:
+    for v in both:
         if v:
             count += 1
             if count == min_run:

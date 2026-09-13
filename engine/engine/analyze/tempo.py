@@ -65,17 +65,16 @@ def estimate_tempo(
     return _librosa(mono, sr, target_bpm)
 
 
+_BEAT_THIS = None
+
+
 def _beat_this(mono: np.ndarray, sr: int, target_bpm: float | None) -> TempoEstimate:
-    from beat_this.inference import File2Beats  # type: ignore
+    from beat_this.inference import Audio2Beats  # type: ignore
 
-    import torch  # noqa: F401
-
-    f2b = File2Beats(checkpoint_path="final0", device="cuda", dbn=False)
-    # beat_this expects 22.05 kHz mono
-    import librosa
-
-    y = librosa.resample(mono, orig_sr=sr, target_sr=22050)
-    beats, downbeats = f2b.process_audio(y, 22050)
+    global _BEAT_THIS
+    if _BEAT_THIS is None:
+        _BEAT_THIS = Audio2Beats(checkpoint_path="final0", device="cuda", dbn=False)
+    beats, downbeats = _BEAT_THIS(mono, sr)   # resamples to 22.05 kHz internally
     beats = np.asarray(beats, dtype=float)
     bpm, cv = _intervals_stats(beats)
     raw = bpm

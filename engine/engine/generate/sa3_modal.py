@@ -27,9 +27,15 @@ class SA3MediumModal:
         )
         return [
             RawClip(
-                audio=np.asarray(c["audio"], dtype=np.float32), sr=c["sr"], prompt=c["prompt"],
+                audio=np.frombuffer(c["audio"], dtype=np.float32).reshape(c["shape"]).copy(),
+                sr=c["sr"], prompt=c["prompt"],
                 seed=c["seed"], provider=self.name, model_revision=c["model_revision"],
                 duration_s=req.duration_s, steps=req.steps, gen_seconds=c["gen_seconds"],
             )
             for c in out
         ]
+
+    def analyze(self, audio: np.ndarray, sr: int, *, target_bpm: float | None, rhythmic: bool, family: str) -> dict:
+        """GPU analysis (beat_this + Demucs). Returns an Analysis dict with `extra.purity`."""
+        a = np.ascontiguousarray(audio, dtype=np.float32)
+        return self._cls().analyze_gpu.remote(a.tobytes(), list(a.shape), sr, target_bpm, rhythmic, family)
