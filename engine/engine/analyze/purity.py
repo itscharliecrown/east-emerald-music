@@ -7,14 +7,24 @@ import numpy as np
 STEMS = ("drums", "bass", "other", "vocals", "guitar", "piano")
 
 
+_MODELS: dict[str, object] = {}
+
+
+def _model(name: str):
+    if name not in _MODELS:
+        from demucs.pretrained import get_model
+        m = get_model(name)
+        m.cuda().eval()
+        _MODELS[name] = m
+    return _MODELS[name]
+
+
 def stem_shares(x: np.ndarray, sr: int, model_name: str = "htdemucs_6s") -> dict[str, float]:
     """Energy share of each stem, summing to 1. Heuristic: the 6s piano stem is known to be weak."""
     import torch
     from demucs.apply import apply_model
-    from demucs.pretrained import get_model
 
-    model = get_model(model_name)
-    model.cuda().eval()
+    model = _model(model_name)
     wav = torch.tensor(x, dtype=torch.float32)
     if wav.ndim == 1:
         wav = wav[None].repeat(2, 1)

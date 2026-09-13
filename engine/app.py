@@ -85,6 +85,13 @@ class Engine:
         torch.cuda.synchronize()
         print(f"loaded SA3 medium in {time.time() - t0:.1f}s")
         self._selftest()
+        # Warm the analyzers too, so the first request doesn't pay for their weights.
+        from engine.analyze.purity import _model
+        from engine.analyze.tempo import estimate_tempo
+        import numpy as np
+        _model("htdemucs_6s")
+        estimate_tempo(np.zeros(44100 * 5, dtype="float32"), 44100, backend="beat_this")
+        print(f"analyzers warm at {time.time() - t0:.1f}s")
 
     def _selftest(self):
         """A broken flash-attn install yields static. Spectral flatness near 1 = noise."""
