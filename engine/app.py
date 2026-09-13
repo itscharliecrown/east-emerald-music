@@ -1,0 +1,165 @@
+"""Modal app: SA3 Medium on an L4 GPU, weights volume, self-test, and the Phase 0 entrypoints.
+
+    modal run app.py::download_weights   # once
+    modal run app.py::selftest
+    modal deploy app.py
+"""
+
+from __future__ import annotations
+
+import os
+import time
+
+import modal
+
+APP_NAME = "east-emerald-engine"
+SA3_REPO = "https://github.com/Stability-AI/stable-audio-3.git"
+SA3_COMMIT = "779434a908193105335fd8d833418603625b2859"  # main @ 2026-09-01
+# Official prebuilt wheel: torch 2.7 / CUDA 12 / cp311. Compiling from source takes ~1 h.
+FLASH_ATTN_WHL = (
+    "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/"
+    "flash_attn-2.7.4.post1+cu12torch2.7cxx11abiTRUE-cp311-cp311-linux_x86_64.whl"
+)
+HF_CACHE = "/weights"
+DATA = "/data"
+
+weights_vol = modal.Volume.from_name("sa3-weights", create_if_missing=True)
+data_vol = modal.Volume.from_name("ee-data", create_if_missing=True)
+secrets = [modal.Secret.from_name("ee-secrets")]
+
+image = (
+    modal.Image.from_registry("nvidia/cuda:12.6.3-devel-ubuntu22.04", add_python="3.11")
+    .apt_install("git", "ffmpeg", "rubberband-cli", "fluidsynth", "libsndfile1")
+    .pip_install("torch==2.7.1", "torchaudio==2.7.1", index_url="https://download.pytorch.org/whl/cu126")
+    .pip_install("packaging", "ninja", "wheel")
+    .pip_install(FLASH_ATTN_WHL)   # a broken install produces static; the selftest catches it
+    .pip_install(f"git+{SA3_REPO}@{SA3_COMMIT}")
+    .pip_install(
+        "scipy", "soundfile", "librosa", "pyloudnorm", "pydantic>=2.7", "pyyaml",
+        "git+https://github.com/CPJKU/beat_this.git", "demucs", "fastapi[standard]", "anthropic",
+    )
+    .env({"HF_HOME": HF_CACHE, "HF_HUB_ENABLE_HF_TRANSFER": "0"})
+    .add_local_python_source("engine")
+)
+
+app = modal.App(APP_NAME, image=image, secrets=secrets)
+
+
+@app.function(volumes={HF_CACHE: weights_vol}, timeout=60 * 60)
+def download_weights():
+    """Pull SA3 Medium (gated: needs HF_TOKEN with accepted terms) into the volume once."""
+    from huggingface_hub import snapshot_download
+
+    for repo in ("stabilityai/stable-audio-3-medium",):
+        p = snapshot_download(repo, token=os.environ["HF_TOKEN"])
+        print("downloaded", repo, "->", p)
+    weights_vol.commit()
+
+
+@app.cls(
+    gpu="L4",
+    volumes={HF_CACHE: weights_vol, DATA: data_vol},
+    scaledown_window=120,
+    max_containers=2,
+    timeout=600,
+)
+class Engine:
+    @modal.enter()
+    def load(self):
+        import torch
+        from stable_audio_3 import StableAudioModel
+
+        t0 = time.time()
+        self.model = StableAudioModel.from_pretrained("medium", device="cuda")
+        self.revision = f"stable-audio-3-medium@{SA3_COMMIT}"
+        torch.cuda.synchronize()
+        print(f"loaded SA3 medium in {time.time() - t0:.1f}s")
+        self._selftest()
+
+    def _selftest(self):
+        """A broken flash-attn install yields static. Spectral flatness near 1 = noise."""
+        import numpy as np
+
+        y = self._run(["TrackType: Instrument, solo upright piano, soft chords, 80 BPM"], 2.0, [1], 8)[0]
+        mono = y.mean(axis=0)
+        spec = np.abs(np.fft.rfft(mono)) + 1e-9
+        flatness = float(np.exp(np.mean(np.log(spec))) / np.mean(spec))
+        print(f"selftest spectral flatness = {flatness:.3f}")
+        if flatness > 0.5:
+            raise RuntimeError(f"self-test failed: output looks like static (flatness {flatness:.2f}). Check flash-attn.")
+
+    def _run(self, prompts, duration_s, seeds, steps, **kw):
+        import torch
+
+        outs = []
+        for prompt, seed in zip(prompts, seeds):
+            audio = self.model.generate(prompt=prompt, duration=duration_s, steps=steps, seed=seed, **kw)
+            if isinstance(audio, torch.Tensor):
+                audio = audio.detach().float().cpu().numpy()
+            audio = audio.squeeze()
+            if audio.ndim == 1:
+                audio = audio[None, :].repeat(2, axis=0)
+            outs.append(audio.astype("float32"))
+        return outs
+
+    @modal.method()
+    def generate(self, prompts: list[str], duration_s: float, seeds: list[int] | None = None,
+                 steps: int = 8, init_audio=None, init_noise_level: float | None = None,
+                 inpaint_ranges_s=None) -> list[dict]:
+        import secrets as _s
+
+        import torch
+
+        seeds = seeds or [_s.randbits(31) for _ in prompts]
+        kw = {}
+        if init_audio is not None:
+            sr, arr = init_audio
+            kw["init_audio"] = (sr, torch.tensor(arr))
+            if inpaint_ranges_s:
+                kw["inpaint_audio"] = kw.pop("init_audio")
+                kw["inpaint_mask_start_seconds"] = [s for s, _ in inpaint_ranges_s]
+                kw["inpaint_mask_end_seconds"] = [e for _, e in inpaint_ranges_s]
+            elif init_noise_level is not None:
+                kw["init_noise_level"] = init_noise_level
+        t0 = time.time()
+        outs = self._run(prompts, duration_s, seeds, steps, **kw)
+        per = (time.time() - t0) / len(prompts)
+        return [
+            {"audio": o.tolist(), "sr": 44100, "prompt": p, "seed": s,
+             "model_revision": self.revision, "gen_seconds": per}
+            for o, p, s in zip(outs, prompts, seeds)
+        ]
+
+    @modal.method()
+    def analyze_gpu(self, audio: list, sr: int, target_bpm: float | None) -> dict:
+        """GPU-side analysis (beat_this + demucs) so the laptop never needs torch."""
+        import numpy as np
+
+        from engine.analyze import analyze
+        from engine.analyze.purity import stem_shares
+
+        x = np.asarray(audio, dtype="float32")
+        a = analyze(x, sr, target_bpm=target_bpm)
+        shares = stem_shares(x, sr)
+        d = a.to_dict()
+        d["stem_shares"] = shares
+        return d
+
+
+@app.function(gpu="L4", volumes={HF_CACHE: weights_vol}, timeout=900)
+def selftest():
+    """Smoke test: load + 2 s generation + timing of a real 8-bar batch."""
+    e = Engine()
+    e.load()
+    t0 = time.time()
+    out = e.generate.local(
+        ["TrackType: Instrument, Genre: Lo-Fi Hip Hop, solo upright piano playing soft jazzy chords in E minor, "
+         "felt-muted hammers, warm and nostalgic, close-miked through cassette tape saturation, 80 BPM"] * 4,
+        duration_s=30.0,
+    )
+    print(f"4 × 30 s in {time.time() - t0:.1f}s; per clip {out[0]['gen_seconds']:.2f}s")
+
+
+@app.local_entrypoint()
+def main():
+    selftest.remote()

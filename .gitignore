@@ -1,0 +1,31 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# node
+node_modules/
+web/.next/
+web/out/
+engine/static/
+
+# audio + benchmark output (large)
+engine/bench/out/
+engine/tests/_tmp/
+*.wav
+*.flac
+*.mp3
+!engine/tests/fixtures/*.wav
+
+# os / editor
+.DS_Store
+.vscode/
+.idea/

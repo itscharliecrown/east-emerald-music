@@ -1,0 +1,115 @@
+# Phase 0 core benchmark (PRD §16.1). 12 prompts × 4 variants.
+# Each item is a LoopSpec-shaped dict; variants are compiled by engine.prompts.
+suite: core
+candidates: 4
+items:
+  - id: 01_lofi_upright
+    instrument: {family: piano, type: upright_piano, techniques: ["soft jazzy minor-ninth and major-seventh chords", "felt-muted hammers"]}
+    genre: Lo-Fi Hip Hop
+    moods: [warm, nostalgic]
+    key: {tonic: E, mode: minor}
+    bpm: 80
+    bars: 8
+    feel: {swing_pct: 58}
+    production: {space: small wooden room, chain: [close-miked, cassette tape saturation]}
+  - id: 02_felt_cinematic
+    instrument: {family: piano, type: felt_piano, techniques: ["intimate slow chords", "soft attack", "pedal resonance"]}
+    genre: Cinematic
+    moods: [intimate, melancholic]
+    key: {tonic: D, mode: minor}
+    bpm: 70
+    bars: 8
+    production: {space: soft room, chain: [very close microphones, mechanical key noise]}
+  - id: 03_rhodes_neosoul
+    instrument: {family: keys, type: rhodes, techniques: ["warm tremolo chords", "neo-soul voicings", "bell-like tines"]}
+    genre: Neo-Soul
+    moods: [warm, soulful]
+    key: {tonic: Eb, mode: major}
+    bpm: 78
+    bars: 8
+    feel: {swing_pct: 57}
+    production: {space: "", chain: [direct recording, subtle chorus]}
+  - id: 04_grand_ballad
+    instrument: {family: piano, type: grand_piano, techniques: ["flowing emotional arpeggios", "sustained chords"]}
+    genre: Pop Ballad
+    moods: [emotional, hopeful]
+    key: {tonic: Db, mode: major}
+    bpm: 72
+    bars: 8
+    production: {space: concert hall, chain: [stereo pair of condenser microphones]}
+  - id: 05_wurli_chillhop
+    instrument: {family: keys, type: wurlitzer, techniques: ["slightly driven chords", "reedy bark"]}
+    genre: Chillhop
+    moods: [laid-back, warm]
+    key: {tonic: F, mode: major}
+    bpm: 88
+    bars: 8
+    feel: {swing_pct: 55}
+    production: {space: "", chain: [tape saturation, small amp]}
+  - id: 06_house_piano
+    instrument: {family: piano, type: grand_piano, techniques: ["rhythmic chord stabs", "bright voicings"]}
+    genre: House
+    moods: [uplifting, energetic]
+    key: {tonic: A, mode: minor}
+    bpm: 124
+    bars: 4
+    production: {space: "", chain: [compressed, bright]}
+  - id: 07_steel_fingerstyle
+    instrument: {family: guitar, type: steel_acoustic_guitar, techniques: ["intimate fingerstyle with alternating thumb bass", "open-voiced arpeggios"]}
+    genre: Acoustic Folk
+    moods: [gentle, hopeful]
+    key: {tonic: D, mode: major}
+    bpm: 96
+    bars: 8
+    production: {space: dry studio room, chain: [stereo pair of small-diaphragm condenser microphones]}
+  - id: 08_nylon_bossa
+    instrument: {family: guitar, type: nylon_guitar, techniques: ["bossa nova comping", "soft thumb bass"]}
+    genre: Bossa Nova
+    moods: [breezy, romantic]
+    key: {tonic: A, mode: minor}
+    bpm: 130
+    bars: 4
+    production: {space: intimate room, chain: [close condenser microphone]}
+  - id: 09_clean_electric_neosoul
+    instrument: {family: guitar, type: clean_electric_guitar, techniques: ["neo-soul chord slides", "hammer-ons", "muted plucks"]}
+    genre: Neo-Soul
+    moods: [smooth, late-night]
+    key: {tonic: C, mode: minor}
+    bpm: 84
+    bars: 8
+    feel: {swing_pct: 56}
+    production: {space: "", chain: [clean tube amp, spring reverb, light chorus]}
+  - id: 10_archtop_lofi
+    instrument: {family: guitar, type: jazz_archtop, techniques: ["soft chord melody", "warm thumb plucks"]}
+    genre: Lo-Fi Jazz
+    moods: [warm, nostalgic]
+    key: {tonic: G, mode: major}
+    bpm: 85
+    bars: 8
+    feel: {swing_pct: 60}
+    production: {space: small club room, chain: [amp microphone, tape]}
+  - id: 11_folk_strum_68
+    instrument: {family: guitar, type: steel_acoustic_guitar, techniques: ["gentle strumming"]}
+    genre: Acoustic Folk
+    moods: [hopeful, warm]
+    key: {tonic: E, mode: major}
+    bpm: 100
+    bars: 8
+    time_signature: "6/8"
+    production: {space: dry studio room, chain: [stereo pair of small-diaphragm condensers]}
+  - id: 12_ambient_swells
+    instrument: {family: guitar, type: clean_electric_guitar, techniques: ["slow volume swells", "long shimmering sustain"]}
+    genre: Ambient
+    moods: [floating, spacious]
+    key: {tonic: E, mode: minor}
+    bpm: 70
+    bars: 8
+    feel: {rhythmic: false}
+    production: {space: vast cathedral reverb, chain: [clean amp, long delay]}
+
+# Default 4 variant axes applied to every item (PRD §9.2 rule 6)
+default_variants:
+  - {axis: register, techniques: ["low-mid voicings"]}
+  - {axis: articulation, techniques: ["gently broken chords"]}
+  - {axis: recording, chain: ["roomy mono microphone", "worn tape wobble"]}
+  - {axis: intensity, mood_override: "very soft and sparse with space"}
