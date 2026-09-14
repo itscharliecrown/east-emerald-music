@@ -125,6 +125,21 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
                     l[k] = json.loads(l[k])
         return r
 
+    @app.get("/v1/requests", dependencies=[Depends(auth)])
+    async def list_requests(limit: int = Query(50, le=200), offset: int = 0):
+        with conn() as con:
+            rows = db.list_requests(con, limit=limit, offset=offset)
+        for r in rows:
+            for k in ("spec", "overrides", "llm_usage"):
+                if isinstance(r.get(k), str):
+                    r[k] = json.loads(r[k])
+            sp = r.get("spec") or {}
+            r["summary"] = {"instrument": (sp.get("instrument") or {}).get("type"), "key": sp.get("key"),
+                            "bpm": sp.get("bpm"), "bars": sp.get("bars"), "genre": sp.get("genre"),
+                            "mode": sp.get("generation_mode")}
+            r.pop("spec", None); r.pop("llm_usage", None)
+        return {"requests": rows}
+
     @app.get("/v1/loops", dependencies=[Depends(auth)])
     async def loops(family: str | None = None, instrument: str | None = None, key: str | None = None,
               mode: str | None = None, genre: str | None = None, bars: int | None = None,

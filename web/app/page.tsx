@@ -1,21 +1,21 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { api, type Loop, type RequestState } from "@/lib/api";
-import { CandidateCard } from "@/components/CandidateCard";
-import { Settings } from "@/components/Settings";
+import { LoopRow } from "@/components/LoopRow";
+import { player } from "@/lib/player";
 
 const GENRES = ["Lo-Fi Hip Hop", "Chillhop", "Boom Bap", "Neo-Soul", "R&B", "Trap Soul", "House", "Acoustic Folk", "Bossa Nova", "Pop Ballad", "Cinematic", "Ambient", "Jazz"];
-const INSTRUMENTS: [string, string][] = [["", "any"], ["upright_piano", "upright piano"], ["felt_piano", "felt piano"], ["grand_piano", "grand piano"], ["rhodes", "Rhodes"], ["wurlitzer", "Wurlitzer"], ["nylon_guitar", "nylon guitar"], ["steel_acoustic_guitar", "steel acoustic"], ["clean_electric_guitar", "clean electric"], ["jazz_archtop", "jazz archtop"]];
-const TONICS = ["", "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
-const MODES = ["minor", "major", "dorian", "mixolydian", "lydian"];
+const INSTRUMENTS: [string, string][] = [["", "Any instrument"], ["felt_piano", "Felt piano"], ["upright_piano", "Upright piano"], ["grand_piano", "Grand piano"], ["rhodes", "Rhodes"], ["wurlitzer", "Wurlitzer"], ["nylon_guitar", "Nylon guitar"], ["steel_acoustic_guitar", "Steel-string guitar"], ["clean_electric_guitar", "Clean electric"], ["jazz_archtop", "Jazz archtop"]];
+const TONICS = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
 const FAMILY: Record<string, string> = { upright_piano: "piano", felt_piano: "piano", grand_piano: "piano", rhodes: "keys", wurlitzer: "keys", nylon_guitar: "guitar", steel_acoustic_guitar: "guitar", clean_electric_guitar: "guitar", jazz_archtop: "guitar" };
+const STEPS: Record<string, string> = { queued: "Waking the engine", parsing: "Reading the brief", composing: "Writing the harmony", generating: "Recording takes", conforming: "Tuning, cutting, leveling" };
 
 export default function Create() {
   const [text, setText] = useState("");
   const [genre, setGenre] = useState("Lo-Fi Hip Hop");
   const [instrument, setInstrument] = useState("");
   const [tonic, setTonic] = useState("");
-  const [mode, setMode] = useState("minor");
+  const [keyMode, setKeyMode] = useState("minor");
   const [bpm, setBpm] = useState("");
   const [bars, setBars] = useState("");
   const [genMode, setGenMode] = useState<"prompt" | "composed">("composed");
@@ -23,124 +23,122 @@ export default function Create() {
   const [pattern, setPattern] = useState("");
   const [progression, setProgression] = useState("");
   const [noise, setNoise] = useState("0.45");
+  const [more, setMore] = useState(false);
   const [req, setReq] = useState<RequestState | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [engineState, setEngineState] = useState<"unknown" | "waking" | "ready">("unknown");
   const [showRejected, setShowRejected] = useState(false);
   const timer = useRef<number | null>(null);
 
-  useEffect(() => { api.wake().then(() => setEngineState("waking")).catch(() => setEngineState("unknown")); }, []);
+  useEffect(() => { api.wake().catch(() => {}); return () => { if (timer.current) window.clearInterval(timer.current); }; }, []);
 
   const poll = (id: string) => {
     if (timer.current) window.clearInterval(timer.current);
     timer.current = window.setInterval(async () => {
       try {
         const r = await api.request(id); setReq(r);
-        if (r.status === "done" || r.status === "failed") { window.clearInterval(timer.current!); setBusy(false); setEngineState("ready"); }
-      } catch (e) { setErr((e as Error).message); }
-    }, 1000);
+        if (r.status === "done" || r.status === "failed") { window.clearInterval(timer.current!); setBusy(false); }
+      } catch (e) { setErr((e as Error).message); window.clearInterval(timer.current!); setBusy(false); }
+    }, 1500);
   };
 
-  const submit = async (extra: { text?: string; parent_loop_id?: string } = {}) => {
+  const submit = async () => {
     setErr(""); setBusy(true); setReq(null);
-    const overrides: Record<string, unknown> = { genre };
+    const overrides: Record<string, unknown> = { genre, generation_mode: genMode, complexity };
     if (instrument) { overrides.instrument_type = instrument; overrides.instrument_family = FAMILY[instrument]; }
-    if (tonic) overrides.key = { tonic, mode };
+    if (tonic) overrides.key = { tonic, mode: keyMode };
     if (bpm) overrides.bpm = Number(bpm);
     if (bars) overrides.bars = Number(bars);
-    overrides.generation_mode = genMode;
-    overrides.complexity = complexity;
     if (pattern) overrides.pattern = pattern;
     if (progression.trim()) overrides.progression = progression.trim();
     if (genMode === "composed") overrides.init_noise_level = Number(noise);
-    try {
-      const { request_id } = await api.create({ text: extra.text ?? text, overrides, parent_loop_id: extra.parent_loop_id });
-      poll(request_id);
-    } catch (e) { setErr((e as Error).message); setBusy(false); }
-  };
-
-  const refine = (l: Loop, kind: "variation" | "companion") => {
-    const t = kind === "companion" ? `A different instrument that fits this ${l.instrument_type.replace(/_/g, " ")} loop` : `More like this`;
-    setText(t); submit({ text: t, parent_loop_id: l.id });
+    try { const { request_id } = await api.create({ text, overrides }); poll(request_id); }
+    catch (e) { setErr((e as Error).message); setBusy(false); }
   };
 
   const update = (l: Loop) => setReq((r) => r && { ...r, loops: r.loops.map((x) => (x.id === l.id ? l : x)) });
   const passed = req?.loops.filter((l) => l.status === "passed") ?? [];
   const rejected = req?.loops.filter((l) => l.status === "rejected") ?? [];
+  useEffect(() => { if (passed.length) player.setQueue(passed); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [req?.status]);
+  const sp = req?.spec;
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between"><Settings /><span className="font-mono text-xs opacity-50">engine: {engineState}</span></div>
-
-      <div className="rounded-xl border border-white/10 bg-white/2 p-4">
-        <textarea className="inp h-20 w-full text-base" placeholder="lo-fi piano, warm, soft chords, E minor, 80 BPM" value={text} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(); }} />
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-          <select className="inp" value={genre} onChange={(e) => setGenre(e.target.value)}>{GENRES.map((g) => <option key={g}>{g}</option>)}</select>
-          <select className="inp" value={instrument} onChange={(e) => setInstrument(e.target.value)}>{INSTRUMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-          <select className="inp" value={tonic} onChange={(e) => setTonic(e.target.value)}>{TONICS.map((t) => <option key={t} value={t}>{t || "key: auto"}</option>)}</select>
-          <select className="inp" value={mode} onChange={(e) => setMode(e.target.value)} disabled={!tonic}>{MODES.map((m) => <option key={m}>{m}</option>)}</select>
-          <input className="inp w-24" placeholder="BPM auto" value={bpm} onChange={(e) => setBpm(e.target.value.replace(/\D/g, ""))} />
-          <select className="inp" value={bars} onChange={(e) => setBars(e.target.value)}><option value="">bars: auto</option><option value="4">4 bars</option><option value="8">8 bars</option></select>
-          <button className="btn ml-auto bg-emerald-700! px-4! py-2! text-sm" disabled={busy || text.trim().length < 2} onClick={() => submit()}>{busy ? "generating…" : "Generate ⌘↵"}</button>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3 text-xs">
-          <span className="opacity-50">harmony</span>
-          <select className="inp" value={genMode} onChange={(e) => setGenMode(e.target.value as "prompt" | "composed")}>
-            <option value="composed">composed (exact chords + MIDI)</option>
-            <option value="prompt">prompt (free, model decides)</option>
-          </select>
-          <select className="inp" value={complexity} onChange={(e) => setComplexity(e.target.value)}>
-            <option value="basic">basic: triads</option>
-            <option value="medium">medium: 7ths + 9ths</option>
-            <option value="complex">complex: extended + borrowed</option>
-          </select>
-          <select className="inp" value={pattern} onChange={(e) => setPattern(e.target.value)}>
-            <option value="">pattern: auto</option><option value="sustained">sustained</option><option value="broken">broken (lo-fi comp)</option>
-            <option value="arpeggio">arpeggio</option><option value="stabs">stabs</option><option value="fingerstyle">fingerstyle</option><option value="strum">strum</option>
-          </select>
-          <input className="inp w-72" placeholder="chords (optional): im9 · ivm7 · bVIImaj7 · v7sus4" value={progression} onChange={(e) => setProgression(e.target.value)} />
-          {genMode === "composed" && (
-            <label className="flex items-center gap-1 opacity-70">timbre freedom
-              <input type="range" min="0.25" max="0.75" step="0.05" value={noise} onChange={(e) => setNoise(e.target.value)} /> {noise}
-            </label>
-          )}
-        </div>
+    <div className="space-y-8">
+      <div>
+        <h1 className="serif text-4xl leading-tight">What do you need?</h1>
+        <p className="mt-1 text-sm text-dust">Describe it like you would to a session player: instrument, how it’s played, the feeling, key and tempo.</p>
       </div>
 
-      {err && <div className="rounded border border-red-900 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>}
+      <section className="rounded-xl border border-line bg-felt p-4">
+        <textarea className="inp h-24 w-full resize-none bg-transparent text-lg" placeholder="felt piano, soft broken chords, nostalgic, E minor, 78" value={text} onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(); }} />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <select className="inp" value={genre} onChange={(e) => setGenre(e.target.value)}>{GENRES.map((g) => <option key={g}>{g}</option>)}</select>
+          <select className="inp" value={instrument} onChange={(e) => setInstrument(e.target.value)}>{INSTRUMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          <select className="inp" value={tonic} onChange={(e) => setTonic(e.target.value)}><option value="">Key: let Claude pick</option>{TONICS.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+          {tonic && <select className="inp" value={keyMode} onChange={(e) => setKeyMode(e.target.value)}>{["minor", "major", "dorian", "mixolydian", "lydian"].map((m) => <option key={m}>{m}</option>)}</select>}
+          <input className="inp w-24" placeholder="BPM" inputMode="numeric" value={bpm} onChange={(e) => setBpm(e.target.value.replace(/\D/g, ""))} />
+          <select className="inp" value={bars} onChange={(e) => setBars(e.target.value)}><option value="">Bars: auto</option><option value="4">4 bars</option><option value="8">8 bars</option></select>
+          <button className="chip ml-auto" onClick={() => setMore(!more)}>{more ? "Fewer options" : "Harmony options"}</button>
+          <button className="btn btn-primary px-4" disabled={busy || text.trim().length < 2} onClick={submit}>{busy ? "Working…" : "Generate"}</button>
+        </div>
+        {more && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+            <select className="inp" value={genMode} onChange={(e) => setGenMode(e.target.value as "prompt" | "composed")}>
+              <option value="composed">Composed: exact chords, MIDI included</option>
+              <option value="prompt">Free: the model improvises</option>
+            </select>
+            <select className="inp" value={complexity} onChange={(e) => setComplexity(e.target.value)}>
+              <option value="basic">Basic harmony</option><option value="medium">Medium harmony</option><option value="complex">Complex harmony</option>
+            </select>
+            <select className="inp" value={pattern} onChange={(e) => setPattern(e.target.value)}>
+              <option value="">Pattern: auto</option><option value="sustained">Sustained</option><option value="broken">Broken chords</option><option value="arpeggio">Arpeggio</option><option value="stabs">Stabs</option><option value="fingerstyle">Fingerstyle</option><option value="strum">Strum</option>
+            </select>
+            <input className="inp w-72" placeholder="Your chords (optional): im9 · ivm7 · bVIImaj7 · v7sus4" value={progression} onChange={(e) => setProgression(e.target.value)} />
+            {genMode === "composed" && (
+              <label className="flex items-center gap-2 text-xs text-dust">Timbre freedom <input type="range" className="seek w-28" min="0.25" max="0.75" step="0.05" value={noise} onChange={(e) => setNoise(e.target.value)} /> {noise}</label>
+            )}
+          </div>
+        )}
+      </section>
+
+      {err && <div className="rounded-lg border border-ember/40 bg-ember/10 p-3 text-sm">{err.includes("disabled") ? "The engine is offline. Check the Modal workspace." : err}</div>}
 
       {req && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3 text-sm">
-            <span className="font-mono text-xs uppercase tracking-wide text-emerald-300">{req.status}</span>
-            {req.spec && <span className="opacity-70">{req.spec.instrument?.type.replace(/_/g, " ")} · {req.spec.key?.tonic} {req.spec.key?.mode} · {req.spec.bpm} BPM · {req.spec.bars} bars · {req.spec.genre}</span>}
-            {req.gpu_seconds !== undefined && req.gpu_seconds !== null && <span className="ml-auto font-mono text-xs opacity-40">gpu {req.gpu_seconds}s · {req.batches_run} batch</span>}
+        <section className="space-y-3">
+          {req.status !== "done" && req.status !== "failed" && (
+            <div className="flex items-center gap-3 text-sm text-dust"><span className="h-2 w-2 animate-pulse rounded-full bg-jade" />{STEPS[req.status] ?? req.status}…</div>
+          )}
+          {req.error && <div className="text-sm text-ember">{req.error}</div>}
+          {sp && (
+            <div className="rounded-xl border border-line p-4">
+              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                <span className="serif text-2xl">{sp.instrument?.type.replace(/_/g, " ")}</span>
+                <span className="sig text-2xl">{sp.key?.tonic}{sp.key?.mode === "major" ? "maj" : sp.key?.mode === "minor" ? "min" : sp.key?.mode} {sp.bpm}</span>
+                <span className="text-sm text-dust">{sp.bars} bars · {sp.genre}</span>
+              </div>
+              {sp.harmony?.progression && (
+                <div className="mt-2 text-sm">
+                  <span className="text-dust">Chords </span><span className="font-mono">{sp.harmony.progression.map((c) => `${c.degree}${c.quality}`).join("  ")}</span>
+                  {req.voicings && <div className="mt-1 text-xs text-dust">{req.voicings.join("  ")}</div>}
+                  {sp.harmony.rationale && <p className="mt-2 max-w-prose text-sm text-dust">{sp.harmony.rationale}</p>}
+                </div>
+              )}
+              {sp.pushback && <p className="mt-2 max-w-prose text-sm text-brass">{sp.pushback}</p>}
+              {sp.assumptions && sp.assumptions.length > 0 && <p className="mt-2 max-w-prose text-xs text-dust">Assumed: {sp.assumptions.join(" ")}</p>}
+            </div>
+          )}
+          <div className="divide-y divide-line/60">
+            {passed.map((l) => <LoopRow key={l.id} loop={l} queue={passed} onChange={update} showDate={false} />)}
           </div>
-          {req.error && <div className="text-sm text-red-300">{req.error}</div>}
-          {req.spec && (
-            <div className="grid gap-2 text-xs md:grid-cols-2">
-              {req.spec.pushback && <div className="rounded border border-amber-900/50 bg-amber-950/20 p-2 text-amber-100"><b>Pushback:</b> {req.spec.pushback}</div>}
-              {req.spec.harmony?.progression && (
-                <div className="rounded border border-white/10 p-2"><b>Harmony ({req.spec.harmony.complexity}, {req.spec.harmony.pattern}):</b> <span className="font-mono">{req.spec.harmony.progression.map((c) => `${c.degree}${c.quality}`).join(" · ")}</span>
-                  {req.voicings && <div className="mt-1 font-mono opacity-60">{req.voicings.join(" · ")}</div>}
-                  <div className="mt-1 opacity-60">{req.spec.harmony.rationale}</div></div>
-              )}
-              {req.spec.assumptions && req.spec.assumptions.length > 0 && (
-                <div className="rounded border border-white/10 p-2 opacity-80"><b>Assumed:</b> {req.spec.assumptions.join(" · ")}</div>
-              )}
-            </div>
-          )}
-          {passed.map((l, i) => <CandidateCard key={l.id} loop={l} index={i} onChange={update} onRefine={refine} warnings={req.warnings?.[l.id]} />)}
-          {req.status === "done" && passed.length === 0 && <div className="text-sm opacity-70">Nothing passed the gates. Try again, or loosen the request.</div>}
+          {req.status === "done" && passed.length === 0 && <p className="text-sm text-dust">Every take failed a check. Generate again, or loosen the request.</p>}
           {rejected.length > 0 && (
-            <div>
-              <button className="text-xs opacity-50 hover:opacity-100" onClick={() => setShowRejected(!showRejected)}>{showRejected ? "hide" : "show"} {rejected.length} rejected</button>
-              {showRejected && <div className="mt-2 space-y-2">{rejected.map((l) => <CandidateCard key={l.id} loop={l} />)}</div>}
+            <div className="text-xs text-dust">
+              <button className="hover:text-paper" onClick={() => setShowRejected(!showRejected)}>{showRejected ? "Hide" : "Show"} {rejected.length} rejected take{rejected.length > 1 ? "s" : ""}</button>
+              {showRejected && <ul className="mt-2 space-y-1">{rejected.map((l) => <li key={l.id} className="font-mono">take {l.candidate_index + 1}: {l.reject_reasons.join(", ")}</li>)}</ul>}
             </div>
           )}
-        </div>
+        </section>
       )}
     </div>
   );

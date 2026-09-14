@@ -45,7 +45,13 @@ export type RequestState = {
   warnings?: Record<string, string[]>;
 };
 
+export type RequestSummary = {
+  id: string; created_at: string; status: string; raw_text: string; error?: string | null; passed_count: number; liked_count: number;
+  summary?: { instrument?: string; key?: { tonic: string; mode: string }; bpm?: number; bars?: number; genre?: string; mode?: string };
+};
+
 export const api = {
+  requests: () => call<{ requests: RequestSummary[] }>("/v1/requests?limit=100"),
   health: () => call<{ ok: boolean; loops: number }>("/v1/health"),
   wake: () => call("/v1/wake", { method: "POST" }),
   create: (body: { text: string; overrides: Record<string, unknown>; candidates?: number; parent_loop_id?: string }) =>

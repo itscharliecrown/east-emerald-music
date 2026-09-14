@@ -1,15 +1,40 @@
 @import "tailwindcss";
 
-@theme inline {
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
+@theme {
+  --color-ink: #0f1412;
+  --color-felt: #18211d;
+  --color-felt-2: #1f2a25;
+  --color-line: #2a3630;
+  --color-paper: #e9e4d8;
+  --color-dust: #8a948e;
+  --color-jade: #4fb286;
+  --color-jade-2: #6fd1a6;
+  --color-brass: #c9a86a;
+  --color-ember: #d9765a;
+  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-sans: var(--font-inter-tight), system-ui, sans-serif;
 }
 
 html { color-scheme: dark; }
+body { background: var(--color-ink); color: var(--color-paper); }
 
-.btn {
-  @apply rounded border border-white/15 bg-white/5 px-2 py-1 hover:bg-white/10 disabled:opacity-40;
-}
-.inp {
-  @apply rounded border border-white/15 bg-black/40 px-2 py-1 text-[#e6ebe8] outline-none focus:border-emerald-400/60;
-}
+::selection { background: color-mix(in oklab, var(--color-jade) 40%, transparent); }
+
+.serif { font-family: var(--font-display); font-variation-settings: "opsz" 72; }
+.sig { font-family: var(--font-display); font-variation-settings: "opsz" 24; font-weight: 500; letter-spacing: -0.01em; color: var(--color-brass); }
+
+.btn { @apply inline-flex items-center gap-1.5 rounded-md border border-line bg-felt px-2.5 py-1.5 text-sm text-paper transition-colors hover:bg-felt-2 disabled:opacity-40; }
+.btn-primary { @apply border-jade bg-jade text-ink hover:bg-jade-2; }
+.btn-ghost { @apply border-transparent bg-transparent hover:bg-felt; }
+.inp { @apply rounded-md border border-line bg-ink px-2.5 py-1.5 text-sm text-paper outline-none placeholder:text-dust focus:border-jade; }
+.chip { @apply rounded-full border border-line px-2.5 py-1 text-xs text-dust transition-colors hover:text-paper; }
+.chip-on { @apply border-brass/60 bg-brass/10 text-brass; }
+
+.row { @apply grid items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-felt; grid-template-columns: 2.25rem minmax(0,1fr) auto; }
+.row-active { @apply bg-felt-2; }
+
+input[type="range"].seek { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: var(--color-line); outline: none; }
+input[type="range"].seek::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--color-paper); border: 2px solid var(--color-ink); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+:focus-visible { outline: 2px solid var(--color-jade); outline-offset: 2px; }

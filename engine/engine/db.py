@@ -126,3 +126,12 @@ def list_loops(con: sqlite3.Connection, *, family=None, instrument=None, key=Non
     sql = "select * from loops" + (" where " + " and ".join(where) if where else "") + \
           " order by created_at desc limit ? offset ?"
     return [dict(r) for r in con.execute(sql, [*args, limit, offset])]
+
+
+def list_requests(con: sqlite3.Connection, *, limit=50, offset=0) -> list[dict]:
+    rows = [dict(r) for r in con.execute(
+        "select r.*, "
+        "(select count(*) from loops l where l.request_id=r.id and l.status='passed') as passed_count, "
+        "(select count(*) from loops l where l.request_id=r.id and l.kept=1) as liked_count "
+        "from requests r order by created_at desc limit ? offset ?", (limit, offset))]
+    return rows
