@@ -15,6 +15,8 @@ Phase 0 passed 2026-09-13 (see `docs/phase0-report.md`: G1 71% usable, G2 91%, G
 - Ubuntu 22.04 `rubberband-cli` is v2. The image builds Rubber Band 3.3.0 from source; `stretch.py` detects the version.
 - Ship audio between containers as float32 bytes, never Python lists.
 
+**2026-09-13 late:** Composed mode built and deployed (`engine/compose/`, `generation_mode=composed`, complexity basic/medium/complex, user progression override, harmony gate, MIDI download). First Composed run rejected everything on `tempo_drift` → fixed with `known_grid` (Composed skips beat tracking and key gates; the harmony check decides). **Untested since that fix: Modal returned "workspace is disabled" on the next request.** Charlie must check modal.com billing/usage. `docs/prompting-guide.md` exists.
+
 ## Phase 0 lessons (keep)
 - Beat genres (lo-fi, hip hop, chillhop, neo-soul, trap) as a `Genre:` tag summon drums. The compiler drops the tag and uses vibe words. Always `Format: Solo` + "played alone".
 - Prompts stay ≤ 70 words, ≤ 3 techniques / moods / chain items. The text encoder truncates.
