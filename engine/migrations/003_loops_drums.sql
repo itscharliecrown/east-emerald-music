@@ -1,0 +1,50 @@
+-- Rebuild loops so category may be 'drums' (SQLite cannot alter a CHECK constraint).
+create table loops_new (
+  id                 text primary key,
+  request_id         text not null references requests (id) on delete cascade,
+  created_at         text not null default (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  candidate_index    integer not null,
+  status             text not null check (status in ('passed','rejected')),
+  reject_reasons     text not null default '[]',
+  category           text not null check (category in ('instrument','texture','one_shot','drums')),
+  instrument_family  text,
+  instrument_type    text,
+  genre              text,
+  moods              text not null default '[]',
+  key_tonic          text,
+  key_mode           text,
+  bpm                real,
+  time_signature     text not null default '4/4',
+  bars               integer check (bars in (4, 8)),
+  length_samples     integer,
+  filename           text,
+  provider           text not null,
+  model_revision     text not null,
+  gen_prompt         text not null,
+  seed               integer,
+  steps              integer,
+  duration_s         real,
+  init_noise_level   real,
+  init_audio_sha256  text,
+  lora               text,
+  analysis_raw       text,
+  conform_ops        text,
+  analysis_final     text,
+  score              real,
+  wav_path           text,
+  raw_path           text,
+  midi_path          text,
+  preview_path       text,
+  peaks              text,
+  files_purged_at    text,
+  kept               integer,
+  stars              integer check (stars between 1 and 5),
+  favorite           integer not null default 0,
+  used_in_track      text,
+  notes              text
+);
+insert into loops_new (id, request_id, created_at, candidate_index, status, reject_reasons, category, instrument_family, instrument_type, genre, moods, key_tonic, key_mode, bpm, time_signature, bars, length_samples, filename, provider, model_revision, gen_prompt, seed, steps, duration_s, init_noise_level, init_audio_sha256, lora, analysis_raw, conform_ops, analysis_final, score, wav_path, raw_path, midi_path, preview_path, peaks, files_purged_at, kept, stars, favorite, used_in_track, notes) select id, request_id, created_at, candidate_index, status, reject_reasons, category, instrument_family, instrument_type, genre, moods, key_tonic, key_mode, bpm, time_signature, bars, length_samples, filename, provider, model_revision, gen_prompt, seed, steps, duration_s, init_noise_level, init_audio_sha256, lora, analysis_raw, conform_ops, analysis_final, score, wav_path, raw_path, midi_path, preview_path, peaks, files_purged_at, kept, stars, favorite, used_in_track, notes from loops;
+drop table loops;
+alter table loops_new rename to loops;
+create index if not exists loops_library_idx on loops (status, kept, instrument_family, key_tonic, key_mode, bpm);
+create index if not exists loops_request_idx on loops (request_id);

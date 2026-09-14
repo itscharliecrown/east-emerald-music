@@ -81,10 +81,14 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
             j = json.loads(p.read_text())
             return _ingest(con, rid, j)
 
+    _DB_MODES = {"prompt", "composed", "reskin", "variation", "fix"}
+
     def _ingest(con, rid: str, j: dict) -> dict | None:
+        mode = j.get("mode", "prompt")
         db.upsert_request(con, {
             "id": rid, "created_at": j.get("created_at"), "completed_at": j.get("completed_at"),
-            "mode": j.get("mode", "prompt"), "raw_text": j.get("raw_text", ""), "overrides": j.get("overrides", {}),
+            # midi / companion / adjust are request kinds, not DB modes
+            "mode": mode if mode in _DB_MODES else "prompt", "raw_text": j.get("raw_text", ""), "overrides": j.get("overrides", {}),
             "spec": j.get("spec"), "status": j.get("status", "queued"), "error": j.get("error"),
             "llm_model": j.get("llm_model"), "llm_usage": j.get("llm_usage"), "gpu_seconds": j.get("gpu_seconds"),
             "batches_run": j.get("batches_run", 0), "parent_loop_id": j.get("parent_loop_id"),
