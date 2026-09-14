@@ -65,7 +65,7 @@ def evaluate(spec: LoopSpec, a: Analysis, *, t: Thresholds = Thresholds(), purit
         if a.tempo.drift_cv > t.tempo_drift_cv:
             r.reasons.append("tempo_drift")
 
-    if spec.category == "instrument":
+    if spec.category == "instrument" and spec.instrument.family != "drums":
         target_pc = PITCH_CLASS[spec.key.tonic]
         detected_mode = a.key.mode
         target_mode = "major" if spec.key.mode in ("major", "lydian", "mixolydian") else "minor"

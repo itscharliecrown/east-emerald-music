@@ -18,7 +18,8 @@ export default function Create() {
   const [keyMode, setKeyMode] = useState("minor");
   const [bpm, setBpm] = useState("");
   const [bars, setBars] = useState("");
-  const [genMode, setGenMode] = useState<"prompt" | "composed">("composed");
+  const [genMode, setGenMode] = useState<"prompt" | "composed" | "midi">("composed");
+  const [adjust, setAdjust] = useState("");
   const [complexity, setComplexity] = useState("medium");
   const [pattern, setPattern] = useState("");
   const [progression, setProgression] = useState("");
@@ -42,7 +43,7 @@ export default function Create() {
     }, 1500);
   };
 
-  const submit = async () => {
+  const submit = async (opts: { text?: string; parent_loop_id?: string } = {}) => {
     setErr(""); setBusy(true); setReq(null);
     const overrides: Record<string, unknown> = { genre, generation_mode: genMode, complexity };
     if (instrument) { overrides.instrument_type = instrument; overrides.instrument_family = FAMILY[instrument]; }
@@ -52,7 +53,7 @@ export default function Create() {
     if (pattern) overrides.pattern = pattern;
     if (progression.trim()) overrides.progression = progression.trim();
     if (genMode === "composed") overrides.init_noise_level = Number(noise);
-    try { const { request_id } = await api.create({ text, overrides }); poll(request_id); }
+    try { const { request_id } = await api.create({ text: opts.text ?? text, overrides, parent_loop_id: opts.parent_loop_id, mode: opts.parent_loop_id ? "adjust" : "prompt" }); poll(request_id); }
     catch (e) { setErr((e as Error).message); setBusy(false); }
   };
 
@@ -80,13 +81,14 @@ export default function Create() {
           <input className="inp w-24" placeholder="BPM" inputMode="numeric" value={bpm} onChange={(e) => setBpm(e.target.value.replace(/\D/g, ""))} />
           <select className="inp" value={bars} onChange={(e) => setBars(e.target.value)}><option value="">Bars: auto</option><option value="4">4 bars</option><option value="8">8 bars</option></select>
           <button className="chip ml-auto" onClick={() => setMore(!more)}>{more ? "Fewer options" : "Harmony options"}</button>
-          <button className="btn btn-primary px-4" disabled={busy || text.trim().length < 2} onClick={submit}>{busy ? "Working…" : "Generate"}</button>
+          <button className="btn btn-primary px-4" disabled={busy || text.trim().length < 2} onClick={() => submit()}>{busy ? "Working…" : genMode === "midi" ? "Write chords" : "Generate"}</button>
         </div>
         {more && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-            <select className="inp" value={genMode} onChange={(e) => setGenMode(e.target.value as "prompt" | "composed")}>
-              <option value="composed">Composed: exact chords, MIDI included</option>
-              <option value="prompt">Free: the model improvises</option>
+            <select className="inp" value={genMode} onChange={(e) => setGenMode(e.target.value as "prompt" | "composed" | "midi")}>
+              <option value="composed">Composed: exact chords, audio + MIDI</option>
+              <option value="prompt">Free: the model improvises (chord MIDI as written)</option>
+              <option value="midi">Chords only: MIDI, no audio, instant</option>
             </select>
             <select className="inp" value={complexity} onChange={(e) => setComplexity(e.target.value)}>
               <option value="basic">Basic harmony</option><option value="medium">Medium harmony</option><option value="complex">Complex harmony</option>
@@ -126,6 +128,13 @@ export default function Create() {
               )}
               {sp.pushback && <p className="mt-2 max-w-prose text-sm text-brass">{sp.pushback}</p>}
               {sp.assumptions && sp.assumptions.length > 0 && <p className="mt-2 max-w-prose text-xs text-dust">Assumed: {sp.assumptions.join(" ")}</p>}
+              {req.status === "done" && passed.length > 0 && (
+                <div className="mt-3 flex gap-2">
+                  <input className="inp flex-1" placeholder="Talk back: darker · less busy · try D minor · slower" value={adjust} onChange={(e) => setAdjust(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && adjust.trim()) { submit({ text: adjust.trim(), parent_loop_id: passed[0].id }); setAdjust(""); } }} />
+                  <button className="btn" disabled={!adjust.trim() || busy} onClick={() => { submit({ text: adjust.trim(), parent_loop_id: passed[0].id }); setAdjust(""); }}>Adjust</button>
+                </div>
+              )}
             </div>
           )}
           <div className="divide-y divide-line/60">

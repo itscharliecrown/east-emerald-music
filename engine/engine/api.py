@@ -16,11 +16,20 @@ from engine import db
 
 
 class CreateRequest(BaseModel):
-    text: str = Field(min_length=2, max_length=600)
-    mode: str = "prompt"
+    text: str = Field(min_length=1, max_length=600)
+    mode: str = "prompt"   # prompt | composed | midi | variation | companion | adjust
     overrides: dict = Field(default_factory=dict)
     candidates: int = Field(4, ge=1, le=4)
     parent_loop_id: str | None = None
+
+
+class VariationRequest(BaseModel):
+    strength: str = "medium"   # subtle | medium | bold
+
+
+class CompanionRequest(BaseModel):
+    kind: str = "drums"        # drums | any instrument type
+    text: str = ""
 
 
 class Curation(BaseModel):
@@ -79,6 +88,7 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
             "spec": j.get("spec"), "status": j.get("status", "queued"), "error": j.get("error"),
             "llm_model": j.get("llm_model"), "llm_usage": j.get("llm_usage"), "gpu_seconds": j.get("gpu_seconds"),
             "batches_run": j.get("batches_run", 0), "parent_loop_id": j.get("parent_loop_id"),
+            "session_id": j.get("session_id"),
         })
         for l in j.get("loops", []):
             db.upsert_loop(con, l)
@@ -98,18 +108,105 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
         wake()
         return {"waking": True}
 
+    def _parent_payload(con, loop_id: str | None) -> tuple[dict | None, str | None]:
+        """Parent loop info for the job + the session it belongs to."""
+        if not loop_id:
+            return None, None
+        loop = db.get_loop(con, loop_id)
+        if not loop:
+            raise HTTPException(404, "parent loop not found")
+        req = db.get_request(con, loop["request_id"]) or {}
+        spec = req.get("spec")
+        if isinstance(spec, str):
+            spec = json.loads(spec)
+        parent = {k: loop.get(k) for k in ("id", "key_tonic", "key_mode", "bpm", "bars", "time_signature",
+                                            "instrument_type", "instrument_family", "genre", "gen_prompt",
+                                            "wav_path", "midi_path", "seed")}
+        parent["spec"] = spec
+        return parent, req.get("session_id") or loop["request_id"]
+
+    def _launch(con, *, text: str, mode: str, overrides: dict, parent_loop_id: str | None, candidates: int = 4) -> str:
+        rid = uuid.uuid4().hex
+        parent, session_id = _parent_payload(con, parent_loop_id)
+        session_id = session_id or rid
+        gen_mode = overrides.get("generation_mode")
+        job_mode = "midi" if gen_mode == "midi" else mode
+        db.upsert_request(con, {"id": rid, "mode": "prompt" if job_mode in ("adjust", "companion", "midi") else job_mode,
+                                "raw_text": text, "overrides": overrides, "status": "queued",
+                                "parent_loop_id": parent_loop_id, "session_id": session_id})
+        spawn_job(rid, text, overrides, job_mode, parent, candidates, session_id)
+        return rid
+
     @app.post("/v1/requests", status_code=202, dependencies=[Depends(auth)])
     async def create(body: CreateRequest):
-        rid = uuid.uuid4().hex
         with conn() as con:
-            parent = db.get_loop(con, body.parent_loop_id) if body.parent_loop_id else None
-            if parent:
-                parent = {k: parent[k] for k in ("key_tonic", "key_mode", "bpm", "bars", "time_signature",
-                                                 "instrument_type", "genre", "gen_prompt")}
-            db.upsert_request(con, {"id": rid, "mode": body.mode, "raw_text": body.text, "overrides": body.overrides,
-                                    "status": "queued", "parent_loop_id": body.parent_loop_id})
-        spawn_job(rid, body.text, body.overrides, body.mode, parent, body.candidates)
+            rid = _launch(con, text=body.text, mode=body.mode, overrides=body.overrides,
+                          parent_loop_id=body.parent_loop_id, candidates=body.candidates)
         return {"request_id": rid}
+
+    @app.post("/v1/loops/{lid}/variations", status_code=202, dependencies=[Depends(auth)])
+    async def variations(lid: str, body: VariationRequest):
+        with conn() as con:
+            rid = _launch(con, text=f"Variation ({body.strength})", mode="variation",
+                          overrides={"strength": body.strength}, parent_loop_id=lid)
+        return {"request_id": rid}
+
+    @app.post("/v1/loops/{lid}/companion", status_code=202, dependencies=[Depends(auth)])
+    async def companion(lid: str, body: CompanionRequest):
+        with conn() as con:
+            loop = db.get_loop(con, lid)
+            if not loop:
+                raise HTTPException(404)
+            if body.kind == "drums":
+                text = body.text or f"A drum loop that sits under this {loop['instrument_type'].replace('_', ' ')} loop, same tempo and feel"
+                overrides = {"companion": "drums", "genre": loop["genre"], "bpm": loop["bpm"], "bars": loop["bars"],
+                             "generation_mode": "prompt"}
+            else:
+                text = body.text or f"A {body.kind.replace('_', ' ')} part that fits this {loop['instrument_type'].replace('_', ' ')} loop, same key, tempo, and chords"
+                overrides = {"instrument_type": body.kind, "genre": loop["genre"], "bpm": loop["bpm"], "bars": loop["bars"],
+                             "key": {"tonic": loop["key_tonic"], "mode": loop["key_mode"]}, "generation_mode": "composed"}
+            rid = _launch(con, text=text, mode="companion", overrides=overrides, parent_loop_id=lid)
+        return {"request_id": rid}
+
+    @app.get("/v1/sessions", dependencies=[Depends(auth)])
+    async def sessions(liked: bool = False):
+        with conn() as con:
+            rows = db.list_sessions(con, liked_only=liked)
+        for s in rows:
+            sp = s.pop("spec", None)
+            if isinstance(sp, str):
+                sp = json.loads(sp)
+            sp = sp or {}
+            s["key"] = sp.get("key"); s["bpm"] = sp.get("bpm"); s["genre"] = sp.get("genre")
+            for l in s["loops"]:
+                for k in ("reject_reasons", "moods", "peaks", "conform_ops"):
+                    if isinstance(l.get(k), str):
+                        l[k] = json.loads(l[k])
+                l.pop("analysis_raw", None); l.pop("analysis_final", None)
+        return {"sessions": rows}
+
+    @app.get("/v1/sessions/{sid}/download", dependencies=[Depends(auth)])
+    async def session_zip(sid: str, liked: bool = True):
+        import io
+        import zipfile
+
+        from fastapi.responses import StreamingResponse
+
+        with conn(reload=True) as con:
+            rows = [s for s in db.list_sessions(con, liked_only=liked, limit=1000) if s["id"] == sid]
+        if not rows:
+            raise HTTPException(404)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for l in rows[0]["loops"]:
+                for key in ("wav_path", "midi_path"):
+                    rel = l.get(key)
+                    if rel and (data_root / rel).exists():
+                        name = l["filename"] if key == "wav_path" else (l["filename"] or "loop.wav").rsplit(".", 1)[0] + ".mid"
+                        z.write(data_root / rel, arcname=name)
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="application/zip",
+                                 headers={"Content-Disposition": f'attachment; filename="EE_session_{sid[:6]}.zip"'})
 
     @app.get("/v1/requests/{rid}", dependencies=[Depends(auth)])
     async def get_request(rid: str):
@@ -175,8 +272,9 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
         if not rel:
             raise HTTPException(404, f"no {format} for this loop")
         path = data_root / rel
-        name = l["filename"] if format == "wav" else Path(rel).name
-        return FileResponse(path, filename=name, media_type="audio/wav" if format == "wav" else "application/octet-stream")
+        name = l["filename"] if format == "wav" else ((l.get("filename") or "loop.wav").rsplit(".", 1)[0] + ".mid" if format == "midi" else Path(rel).name)
+        media = {"wav": "audio/wav", "midi": "audio/midi"}.get(format, "application/octet-stream")
+        return FileResponse(path, filename=name, media_type=media)
 
     @app.get("/v1/loops/{lid}/audio", dependencies=[Depends(auth)])
     async def audio(lid: str):

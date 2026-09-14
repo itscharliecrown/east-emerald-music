@@ -79,7 +79,8 @@ def clipping_runs(x: np.ndarray, threshold: float = 0.95, min_run: int = 4) -> i
     return runs
 
 
-def silent_bars(x: np.ndarray, bar_samples: int, threshold_db: float = -45.0) -> int:
+def silent_bars(x: np.ndarray, bar_samples: int, threshold_db: float = -55.0) -> int:
+    """A bar counts as silent below -55 dBFS RMS. -45 rejected sparse felt-piano bars (2026-09-14)."""
     mono = to_mono(x)
     n_bars = max(1, len(mono) // bar_samples)
     silent = 0

@@ -165,10 +165,32 @@ def texture_prompt(texture_type: str) -> str:
     return _validate(_join(["TrackType: SFX", source, behavior, character]))
 
 
+_DRUM_KITS = {
+    "lo-fi hip hop": "dusty lo-fi boom bap drum kit, soft swung kick and snare, crisp hats, vinyl-warm",
+    "chillhop": "laid-back chillhop drum kit, soft kick, brushed snare, light hats",
+    "boom bap": "hard-hitting boom bap drum break, punchy kick, cracking snare, swung hats",
+    "neo-soul": "neo-soul drum kit, loose pocket, rimshots, ghost-note hats",
+    "r&b": "smooth r&b drum kit, tight kick, snappy snare, light hats",
+    "trap soul": "trap drum kit, 808 kick, sharp snare, rolling hi-hats, half-time",
+    "house": "four-on-the-floor house drum kit, punchy kick, open hat on the offbeat, clap",
+}
+
+
+def drums_prompt(spec: LoopSpec, variant: Variant | None = None) -> str:
+    g = spec.genre.strip().lower()
+    kit = _DRUM_KITS.get(g, f"{spec.genre} drum kit")
+    extra = ", ".join(_dedupe((variant.techniques if variant else []) + list(spec.instrument.techniques)))[:80]
+    parts = ["TrackType: Instrument", "Format: Solo", f"Genre: {spec.genre}", f"solo drum loop played alone, {kit}",
+             extra, _feel_phrase(spec), ", ".join(spec.moods[:2]), f"{int(round(spec.bpm))} BPM"]
+    return _validate(_join(parts))
+
+
 def compile_prompts(spec: LoopSpec) -> list[str]:
     """One prompt per variant (4), or a single base prompt if no variants."""
     if spec.category == "texture":
         return [texture_prompt(spec.instrument.type)]
+    if spec.category == "drums" or spec.instrument.family == "drums":
+        return [drums_prompt(spec, v) for v in spec.variants] if spec.variants else [drums_prompt(spec)]
     if not spec.variants:
         return [instrument_prompt(spec)]
     return [instrument_prompt(spec, v) for v in spec.variants]

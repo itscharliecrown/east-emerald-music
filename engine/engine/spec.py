@@ -11,7 +11,7 @@ from engine import SAMPLE_RATE
 Tonic = Literal["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 Mode = Literal["major", "minor", "dorian", "mixolydian", "lydian", "phrygian"]
 TimeSignature = Literal["4/4", "3/4", "6/8"]
-Category = Literal["instrument", "texture", "one_shot"]
+Category = Literal["instrument", "texture", "one_shot", "drums"]
 VariantAxis = Literal["register", "articulation", "recording", "intensity"]
 
 # Quarter notes per bar, the DAW convention (PRD §7.6). BPM is always quarter-note BPM.
@@ -97,7 +97,7 @@ class TextureSuggestion(BaseModel):
 
 class LoopSpec(BaseModel):
     category: Category = "instrument"
-    generation_mode: Literal["prompt", "composed"] = "prompt"
+    generation_mode: Literal["prompt", "composed", "midi"] = "prompt"
     instrument: Instrument
     genre: str
     moods: list[str] = Field(default_factory=list)

@@ -154,7 +154,7 @@ class Engine:
 
     @modal.method()
     def run_job(self, request_id: str, text: str, overrides: dict, mode: str, parent: dict | None,
-                candidates: int = 4) -> dict:
+                candidates: int = 4, session_id: str | None = None) -> dict:
         """Whole request on this container: intent → generate → analyze → conform → export → job file."""
         from pathlib import Path
 
@@ -185,7 +185,7 @@ class Engine:
 
         return run_request(request_id=request_id, text=text, overrides=overrides, mode=mode, parent=parent,
                            generator=InProcess(), data_root=Path(DATA), candidates=candidates,
-                           commit=data_vol.commit)
+                           commit=data_vol.commit, session_id=session_id)
 
     @modal.method()
     def analyze_gpu(self, audio: bytes, shape: list[int], sr: int, target_bpm: float | None,
@@ -205,6 +205,17 @@ class Engine:
         return d
 
 
+@app.function(volumes={DATA: data_vol}, timeout=300)
+def midi_job(request_id: str, text: str, overrides: dict, parent: dict | None, session_id: str | None) -> dict:
+    """Chord-progression MIDI only: CPU, no model weights."""
+    from pathlib import Path
+
+    from engine.job import midi_request
+
+    return midi_request(request_id=request_id, text=text, overrides=overrides, parent=parent,
+                        data_root=Path(DATA), commit=data_vol.commit, session_id=session_id)
+
+
 @app.function(volumes={DATA: data_vol}, max_containers=1, scaledown_window=300, timeout=3600)
 @modal.concurrent(max_inputs=32)
 @modal.asgi_app()
@@ -213,8 +224,11 @@ def web():
 
     from engine.api import build_app
 
-    def spawn_job(rid, text, overrides, mode, parent, candidates):
-        Engine().run_job.spawn(rid, text, overrides, mode, parent, candidates)
+    def spawn_job(rid, text, overrides, mode, parent, candidates, session_id=None):
+        if mode == "midi":
+            midi_job.spawn(rid, text, overrides, parent, session_id)
+        else:
+            Engine().run_job.spawn(rid, text, overrides, mode, parent, candidates, session_id)
 
     def wake():
         Engine().ping.spawn()

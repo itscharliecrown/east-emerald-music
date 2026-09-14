@@ -1,11 +1,14 @@
 """One request end to end, on the GPU container (PRD §7). Writes a job file the API reads.
 
-    intent → compile → generate → analyze → conform → gate/rank → export → job json
+Modes:
+  prompt    intent → compile → generate → analyze → conform → export (+ chord MIDI as written)
+  composed  intent → compose (MIDI + seed render) → SA3 audio-to-audio → harmony gate → export
+  midi      intent → compose → MIDI only (no GPU; see midi_request)
+  variation parent loop audio → SA3 audio-to-audio at low noise → known-grid conform (no Claude)
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import secrets
 import time
@@ -23,6 +26,8 @@ from engine.generate.base import GenerateRequest
 from engine.intent import parse_intent
 from engine.prompts import compile_prompts
 from engine.spec import LoopSpec
+
+STRENGTH_NOISE = {"subtle": 0.35, "medium": 0.5, "bold": 0.65}
 
 
 def _now() -> str:
@@ -49,6 +54,40 @@ class JobWriter:
             self.commit()
 
 
+def _loop_context_audio(loop_wav: Path, spec: LoopSpec, sr: int = 44100) -> np.ndarray:
+    """Parent loop as SA3 seed: pre-roll = its last bar, tail = its first bar (same as the MIDI seed)."""
+    import soundfile as sf
+
+    y, got = sf.read(loop_wav, dtype="float32", always_2d=True)
+    y = y.T
+    bar = int(round(spec.bar_seconds * sr))
+    ctx = np.concatenate([y[:, -bar:], y, y[:, :bar]], axis=1)
+    n = int(round(spec.generate_seconds * sr))
+    if ctx.shape[1] < n:
+        ctx = np.pad(ctx, ((0, 0), (0, n - ctx.shape[1])))
+    return ctx[:, :n]
+
+
+def _loop_record(spec: LoopSpec, request_id: str, idx: int, clip, a, shares, pur, res, harmony, midi_rel, noise) -> dict:
+    return {
+        "id": uuid.uuid4().hex, "request_id": request_id, "created_at": _now(), "candidate_index": idx,
+        "status": "passed" if res.gate.passed else "rejected",
+        "reject_reasons": res.gate.reasons, "warnings": res.gate.warnings,
+        "category": spec.category, "instrument_family": spec.instrument.family,
+        "instrument_type": spec.instrument.type, "genre": spec.genre, "moods": spec.moods,
+        "key_tonic": spec.key.tonic, "key_mode": spec.key.mode, "bpm": spec.bpm,
+        "time_signature": spec.time_signature, "bars": spec.bars,
+        "length_samples": spec.loop_samples if res.loop is not None else None,
+        "provider": clip.provider, "model_revision": clip.model_revision, "gen_prompt": clip.prompt,
+        "seed": clip.seed, "steps": clip.steps, "duration_s": clip.duration_s,
+        "init_noise_level": noise, "midi_path": midi_rel,
+        "analysis_raw": {**a.to_dict(), "stem_shares": shares, "purity": pur, "harmony": harmony},
+        "conform_ops": res.ops,
+        "analysis_final": res.analysis_final.to_dict() if res.analysis_final else None,
+        "score": res.score,
+    }
+
+
 def run_request(
     *,
     request_id: str,
@@ -56,57 +95,80 @@ def run_request(
     overrides: dict,
     mode: str,
     parent: dict | None,
-    generator,             # object with .generate(GenerateRequest) -> list[RawClip], running in-process
+    generator,
     data_root: Path,
     candidates: int = 4,
     max_batches: int = 2,
     commit=None,
+    session_id: str | None = None,
 ) -> dict:
     job = JobWriter(data_root, request_id, commit)
-    job.update(status="parsing", mode=mode, raw_text=text, overrides=overrides)
+    job.update(status="parsing", mode=mode, raw_text=text, overrides=overrides, session_id=session_id,
+               parent_loop_id=(parent or {}).get("id"))
     t_gpu = 0.0
     try:
-        intent = parse_intent(text, overrides=overrides, parent=parent)
-        spec = intent.spec
-        job.update(status="generating", spec=spec.model_dump(by_alias=True), llm_model=intent.model,
-                   llm_usage=intent.usage)
+        # --- spec: from Claude, or inherited verbatim for variations
+        if mode == "variation" and parent and parent.get("spec"):
+            spec = LoopSpec.model_validate(parent["spec"])
+            spec.generation_mode = "composed"
+            intent_model, usage = None, None
+        else:
+            intent = parse_intent(text, overrides=overrides, parent=parent)
+            spec, intent_model, usage = intent.spec, intent.model, intent.usage
+            if mode == "companion" and overrides.get("companion") == "drums":
+                spec.category = "drums"
+                spec.instrument.family = "drums"
+                spec.instrument.type = f"{spec.genre.lower().replace(' ', '_')}_drums"
+                spec.generation_mode = "prompt"
+        job.update(status="generating", spec=spec.model_dump(by_alias=True), llm_model=intent_model, llm_usage=usage)
+
+        # --- seed audio: composed MIDI render, or the parent loop for variations
+        composition, midi_rel, seed_audio, noise = None, None, None, None
+        if mode == "variation" and parent:
+            seed_audio = _loop_context_audio(data_root / parent["wav_path"], spec)
+            noise = STRENGTH_NOISE.get(str(overrides.get("strength", "medium")), 0.5)
+            midi_rel = parent.get("midi_path")
+            known_grid = True
+        elif spec.generation_mode == "composed" and spec.harmony and spec.category != "drums":
+            from engine.compose.pipeline import compose
+            job.update(status="composing")
+            composition = compose(spec, data_root / "midi" / request_id, seed=secrets.randbits(16))
+            midi_rel = str(composition.midi_path.relative_to(data_root))
+            seed_audio = composition.seed_audio
+            noise = float(overrides.get("init_noise_level") or 0.45)
+            known_grid = True
+            job.update(midi_path=midi_rel, voicings=[v.symbol for v in composition.voicings])
+        else:
+            known_grid = False
+            if spec.harmony and spec.category != "drums":
+                # Prompt mode still ships the chords as written, as MIDI (no render).
+                from engine.compose.pipeline import compose
+                comp = compose(spec, data_root / "midi" / request_id, seed=0, render=False)
+                midi_rel = str(comp.midi_path.relative_to(data_root))
+                job.update(midi_path=midi_rel, voicings=[v.symbol for v in comp.voicings])
 
         passed: list[dict] = []
         rejected: list[dict] = []
         batches = 0
-        composition = None
-        midi_rel = None
-        if spec.generation_mode == "composed" and spec.harmony:
-            from engine.compose.pipeline import compose
-            job.update(status="composing")
-            comp_dir = data_root / "midi" / request_id
-            composition = compose(spec, comp_dir, seed=secrets.randbits(16))
-            midi_rel = str(composition.midi_path.relative_to(data_root))
-            job.update(midi_path=midi_rel, voicings=[v.symbol for v in composition.voicings])
         while batches < max_batches and len(passed) < 2:
             batches += 1
             prompts = compile_prompts(spec)[:candidates]
             t0 = time.time()
-            if composition is not None:
-                # Timbre transfer: keep the notes, change the instrument (SA3 guide: 0.4 typical).
-                noise = float((overrides or {}).get("init_noise_level") or 0.45)
-                clips = generator.generate(GenerateRequest(
-                    prompts=prompts, duration_s=spec.generate_seconds,
-                    init_audio=(44100, composition.seed_audio), init_noise_level=noise))
-            else:
-                clips = generator.generate(GenerateRequest(prompts=prompts, duration_s=spec.generate_seconds))
+            req = GenerateRequest(prompts=prompts, duration_s=spec.generate_seconds)
+            if seed_audio is not None:
+                req.init_audio = (44100, seed_audio)
+                req.init_noise_level = noise
+            clips = generator.generate(req)
             t_gpu += time.time() - t0
             job.update(status="conforming", batches_run=batches)
             for k, clip in enumerate(clips):
                 idx = (batches - 1) * candidates + k
                 t0 = time.time()
-                # Composed: the grid is known, so skip beat tracking (slow, and only adds jitter).
-                a = analyze(clip.audio, clip.sr, target_bpm=spec.bpm,
-                            rhythmic=spec.feel.rhythmic and composition is None)
+                a = analyze(clip.audio, clip.sr, target_bpm=spec.bpm, rhythmic=spec.feel.rhythmic and not known_grid)
                 shares = stem_shares(clip.audio, clip.sr)
                 pur = purity_for(shares, spec.instrument.family)
                 res = conform_clip(spec, clip.audio, clip.sr, a, purity=pur, vocal_share=shares.get("vocals", 0.0),
-                                   known_grid=composition is not None)
+                                   known_grid=known_grid)
                 harmony = None
                 if composition is not None and res.loop is not None:
                     from engine.compose.harmony_check import harmony_similarity
@@ -116,34 +178,15 @@ def run_request(
                         res.gate.reasons.append("harmony_drift")
                         res.loop = None
                 t_gpu += time.time() - t0
-                loop_id = uuid.uuid4().hex
-                rec = {
-                    "id": loop_id, "request_id": request_id, "created_at": _now(), "candidate_index": idx,
-                    "status": "passed" if res.gate.passed else "rejected",
-                    "reject_reasons": res.gate.reasons, "warnings": res.gate.warnings,
-                    "category": spec.category, "instrument_family": spec.instrument.family,
-                    "instrument_type": spec.instrument.type, "genre": spec.genre, "moods": spec.moods,
-                    "key_tonic": spec.key.tonic, "key_mode": spec.key.mode, "bpm": spec.bpm,
-                    "time_signature": spec.time_signature, "bars": spec.bars,
-                    "length_samples": spec.loop_samples if res.loop is not None else None,
-                    "provider": clip.provider, "model_revision": clip.model_revision, "gen_prompt": clip.prompt,
-                    "seed": clip.seed, "steps": clip.steps, "duration_s": clip.duration_s,
-                    "init_noise_level": (overrides or {}).get("init_noise_level", 0.45) if composition else None,
-                    "midi_path": midi_rel,
-                    "analysis_raw": {**a.to_dict(), "stem_shares": shares, "purity": pur, "harmony": harmony},
-                    "conform_ops": res.ops,
-                    "analysis_final": res.analysis_final.to_dict() if res.analysis_final else None,
-                    "score": res.score,
-                }
-                raw_path = data_root / "raw" / f"{loop_id}.flac"
+                rec = _loop_record(spec, request_id, idx, clip, a, shares, pur, res, harmony, midi_rel, noise)
+                raw_path = data_root / "raw" / f"{rec['id']}.flac"
                 write_raw_flac(raw_path, clip.audio, clip.sr)
                 rec["raw_path"] = str(raw_path.relative_to(data_root))
                 if res.loop is not None:
-                    fname = loop_filename(spec, id4=loop_id[:4])
+                    fname = loop_filename(spec, id4=rec["id"][:4])
                     wav_path = data_root / "loops" / fname
                     write_wav24(wav_path, res.loop, clip.sr)
-                    rec.update({"filename": fname, "wav_path": str(wav_path.relative_to(data_root)),
-                                "peaks": _peaks(res.loop)})
+                    rec.update({"filename": fname, "wav_path": str(wav_path.relative_to(data_root)), "peaks": _peaks(res.loop)})
                     passed.append(rec)
                 else:
                     rejected.append(rec)
@@ -151,6 +194,41 @@ def run_request(
         passed.sort(key=lambda r: -r["score"])
         job.update(status="done", loops=passed + rejected, completed_at=_now(), gpu_seconds=round(t_gpu, 2),
                    batches_run=batches)
+    except Exception as e:  # noqa: BLE001
+        job.update(status="failed", error=f"{type(e).__name__}: {e}", completed_at=_now())
+        raise
+    return job.state
+
+
+def midi_request(*, request_id: str, text: str, overrides: dict, parent: dict | None, data_root: Path,
+                 commit=None, session_id: str | None = None) -> dict:
+    """Chord-progression MIDI generator: Claude writes the harmony, we voice it. No GPU, ~15 s."""
+    from engine.compose.pipeline import compose
+
+    job = JobWriter(data_root, request_id, commit)
+    job.update(status="parsing", mode="midi", raw_text=text, overrides=overrides, session_id=session_id)
+    try:
+        intent = parse_intent(text, overrides={**overrides, "generation_mode": "composed"}, parent=parent)
+        spec = intent.spec
+        spec.generation_mode = "midi"
+        if not spec.harmony:
+            raise RuntimeError("no harmony plan returned")
+        job.update(status="composing", spec=spec.model_dump(by_alias=True), llm_model=intent.model, llm_usage=intent.usage)
+        comp = compose(spec, data_root / "midi" / request_id, seed=secrets.randbits(16), render=False)
+        midi_rel = str(comp.midi_path.relative_to(data_root))
+        rec = {
+            "id": uuid.uuid4().hex, "request_id": request_id, "created_at": _now(), "candidate_index": 0,
+            "status": "passed", "reject_reasons": [], "warnings": [], "category": "instrument",
+            "instrument_family": spec.instrument.family, "instrument_type": spec.instrument.type, "genre": spec.genre,
+            "moods": spec.moods, "key_tonic": spec.key.tonic, "key_mode": spec.key.mode, "bpm": spec.bpm,
+            "time_signature": spec.time_signature, "bars": spec.bars, "length_samples": spec.loop_samples,
+            "provider": "midi", "model_revision": "compose-v1", "gen_prompt": " · ".join(spec.harmony.symbols(spec.key)),
+            "seed": None, "steps": None, "duration_s": spec.loop_seconds, "midi_path": midi_rel,
+            "filename": loop_filename(spec, id4=request_id[:4]).replace(".wav", ".mid"),
+            "analysis_raw": None, "conform_ops": {"midi_only": True}, "analysis_final": None, "score": 1.0, "peaks": None,
+        }
+        job.update(status="done", loops=[rec], midi_path=midi_rel, voicings=[v.symbol for v in comp.voicings],
+                   completed_at=_now(), gpu_seconds=0.0, batches_run=0)
     except Exception as e:  # noqa: BLE001
         job.update(status="failed", error=f"{type(e).__name__}: {e}", completed_at=_now())
         raise

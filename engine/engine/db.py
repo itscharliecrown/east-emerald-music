@@ -44,7 +44,7 @@ def _now() -> str:
 
 def upsert_request(con: sqlite3.Connection, r: dict) -> None:
     cols = ("id", "created_at", "completed_at", "mode", "raw_text", "overrides", "spec", "parent_loop_id",
-            "status", "error", "llm_model", "llm_usage", "gpu_seconds", "batches_run")
+            "status", "error", "llm_model", "llm_usage", "gpu_seconds", "batches_run", "session_id", "seed")
     row = {c: r.get(c) for c in cols}
     for c in ("overrides", "spec", "llm_usage"):
         if row[c] is not None and not isinstance(row[c], str):
@@ -55,7 +55,9 @@ def upsert_request(con: sqlite3.Connection, r: dict) -> None:
     row["batches_run"] = row["batches_run"] or 0
     con.execute(
         f"insert into requests ({','.join(cols)}) values ({','.join('?' * len(cols))}) "
-        "on conflict(id) do update set " + ", ".join(f"{c}=excluded.{c}" for c in cols if c not in ("id", "created_at")),
+        "on conflict(id) do update set " + ", ".join(
+            f"{c}=coalesce(excluded.{c}, requests.{c})" if c in ("session_id", "seed", "parent_loop_id") else f"{c}=excluded.{c}"
+            for c in cols if c not in ("id", "created_at")),
         [row[c] for c in cols],
     )
 
@@ -135,3 +137,28 @@ def list_requests(con: sqlite3.Connection, *, limit=50, offset=0) -> list[dict]:
         "(select count(*) from loops l where l.request_id=r.id and l.kept=1) as liked_count "
         "from requests r order by created_at desc limit ? offset ?", (limit, offset))]
     return rows
+
+
+def list_sessions(con: sqlite3.Connection, *, liked_only=False, limit=50) -> list[dict]:
+    """Sessions = requests grouped by session_id (root request). Each carries its passed loops."""
+    reqs = [dict(r) for r in con.execute(
+        "select id, session_id, created_at, raw_text, spec, status from requests order by created_at")]
+    by: dict[str, dict] = {}
+    for r in reqs:
+        sid = r["session_id"] or r["id"]
+        s = by.setdefault(sid, {"id": sid, "created_at": r["created_at"], "title": r["raw_text"], "spec": r["spec"], "requests": [], "loops": []})
+        s["requests"].append(r["id"])
+        s["updated_at"] = r["created_at"]
+    if not by:
+        return []
+    q = "select * from loops where status='passed'" + (" and kept=1" if liked_only else "") + " order by created_at"
+    for l in con.execute(q):
+        l = dict(l)
+        rid = l["request_id"]
+        for s in by.values():
+            if rid in s["requests"]:
+                s["loops"].append(l)
+                break
+    out = [s for s in by.values() if s["loops"]] if liked_only else list(by.values())
+    out.sort(key=lambda s: s["updated_at"], reverse=True)
+    return out[:limit]

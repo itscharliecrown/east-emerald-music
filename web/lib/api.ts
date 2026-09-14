@@ -34,7 +34,7 @@ export type Loop = {
   key_tonic: string; key_mode: string; bpm: number; bars: number; time_signature: string; filename?: string;
   gen_prompt: string; seed: number; score: number; peaks?: number[]; kept?: number | null; stars?: number | null;
   favorite?: number; conform_ops?: Record<string, unknown>; analysis_raw?: Record<string, unknown>;
-  analysis_final?: Record<string, unknown>; created_at: string; midi_path?: string | null; init_noise_level?: number | null;
+  analysis_final?: Record<string, unknown>; created_at: string; midi_path?: string | null; init_noise_level?: number | null; wav_path?: string | null; provider?: string;
 };
 
 export type RequestState = {
@@ -50,11 +50,20 @@ export type RequestSummary = {
   summary?: { instrument?: string; key?: { tonic: string; mode: string }; bpm?: number; bars?: number; genre?: string; mode?: string };
 };
 
+export type Session = {
+  id: string; created_at: string; updated_at: string; title: string; requests: string[]; loops: Loop[];
+  key?: { tonic: string; mode: string } | null; bpm?: number | null; genre?: string | null;
+};
+
 export const api = {
+  sessions: (liked = false) => call<{ sessions: Session[] }>(`/v1/sessions?liked=${liked}`),
+  sessionZipUrl: (id: string, liked = true) => { const { url, token } = getConfig(); return `${url}/v1/sessions/${id}/download?liked=${liked}&token=${encodeURIComponent(token)}`; },
+  variation: (id: string, strength: "subtle" | "medium" | "bold") => call<{ request_id: string }>(`/v1/loops/${id}/variations`, { method: "POST", body: JSON.stringify({ strength }) }),
+  companion: (id: string, kind: string, text = "") => call<{ request_id: string }>(`/v1/loops/${id}/companion`, { method: "POST", body: JSON.stringify({ kind, text }) }),
   requests: () => call<{ requests: RequestSummary[] }>("/v1/requests?limit=100"),
   health: () => call<{ ok: boolean; loops: number }>("/v1/health"),
   wake: () => call("/v1/wake", { method: "POST" }),
-  create: (body: { text: string; overrides: Record<string, unknown>; candidates?: number; parent_loop_id?: string }) =>
+  create: (body: { text: string; overrides: Record<string, unknown>; candidates?: number; parent_loop_id?: string; mode?: string }) =>
     call<{ request_id: string }>("/v1/requests", { method: "POST", body: JSON.stringify(body) }),
   request: (id: string) => call<RequestState>(`/v1/requests/${id}`),
   loops: (q: Record<string, string | number | boolean | undefined>) => {

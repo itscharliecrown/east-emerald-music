@@ -25,4 +25,4 @@ def test_migrate_and_roundtrip(tmp_path):
 def test_migrations_are_idempotent(tmp_path):
     con = db.connect(tmp_path / "t.db")
     db.migrate(con)
-    assert con.execute("select count(*) from schema_version").fetchone()[0] == 1
+    assert con.execute("select count(*) from schema_version").fetchone()[0] == len(list(db.MIGRATIONS.glob("*.sql")))

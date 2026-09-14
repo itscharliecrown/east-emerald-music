@@ -45,6 +45,8 @@ def purity_for(shares: dict[str, float], family: str) -> float:
     stem 0.23–0.67 on clips with zero drums), so "requested stem share" punished clean takes.
     Bleed from drums/bass/vocals is the signal that matters for a solo instrument loop.
     """
+    if family == "drums":
+        return shares.get("drums", 0.0) + 0.5 * shares.get("other", 0.0)   # percussion often lands in "other"
     foreign = shares.get("drums", 0.0) + shares.get("vocals", 0.0)
     # Demucs files a guitar's thumb bass / low strings as "bass" (Charlie rated those clips
     # 4–5, no bass instrument present). Only count bass as foreign for keyboard families.
