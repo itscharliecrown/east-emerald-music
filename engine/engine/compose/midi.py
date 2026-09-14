@@ -27,13 +27,15 @@ def _wrap_notes(notes: list[Note], spec: LoopSpec) -> list[Note]:
     return out
 
 
-def write_midi(notes: list[Note], spec: LoopSpec, path: Path, *, with_context: bool = False) -> Path:
+def write_midi(notes: list[Note], spec: LoopSpec, path: Path, *, with_context: bool = False, program: int | None = None,
+               pedal: bool = True, name: str | None = None) -> Path:
     import pretty_midi
 
     pm = pretty_midi.PrettyMIDI(initial_tempo=spec.bpm, resolution=480)
     num, den = spec.time_signature.split("/")
     pm.time_signature_changes.append(pretty_midi.TimeSignature(int(num), int(den), 0))
-    inst = pretty_midi.Instrument(program=GM_PROGRAM.get(spec.instrument.type, 0), name=spec.instrument.type)
+    inst = pretty_midi.Instrument(program=GM_PROGRAM.get(spec.instrument.type, 0) if program is None else program,
+                                  name=name or spec.instrument.type)
     spb = 60.0 / spec.bpm
     seq = _wrap_notes(notes, spec) if with_context else notes
     limit_beats = (spec.bars + (2 if with_context else 0)) * spec.quarters_per_bar
@@ -43,7 +45,7 @@ def write_midi(notes: list[Note], spec: LoopSpec, path: Path, *, with_context: b
             continue
         inst.notes.append(pretty_midi.Note(velocity=n.vel, pitch=n.pitch, start=n.start * spb, end=end * spb))
     # Legato pedal: down just after each chord onset; simplest reliable version = pedal on the beat grid.
-    if spec.instrument.family in ("piano", "keys") and spec.harmony and spec.harmony.pattern in ("sustained", "broken", "arpeggio"):
+    if pedal and spec.instrument.family in ("piano", "keys") and spec.harmony and spec.harmony.pattern in ("sustained", "broken", "arpeggio"):
         t = 0.0
         offset = spec.quarters_per_bar if with_context else 0
         for c in ([spec.harmony.progression[-1]] if with_context else []) + spec.harmony.progression + ([spec.harmony.progression[0]] if with_context else []):

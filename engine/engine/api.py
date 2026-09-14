@@ -32,6 +32,11 @@ class CompanionRequest(BaseModel):
     text: str = ""
 
 
+class MelodyRequest(BaseModel):
+    instrument_type: str = ""   # default: same instrument as the loop
+    text: str = ""
+
+
 class Curation(BaseModel):
     kept: bool | None = None
     stars: int | None = Field(None, ge=1, le=5)
@@ -100,6 +105,8 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
         if out:
             out["warnings"] = {l["id"]: l.get("warnings", []) for l in j.get("loops", [])}
             out["voicings"] = j.get("voicings")
+            out["melody"] = j.get("melody")
+            out["melody_fixes"] = j.get("melody_fixes")
         return out
 
     @app.get("/v1/health")
@@ -135,7 +142,7 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
         session_id = session_id or rid
         gen_mode = overrides.get("generation_mode")
         job_mode = "midi" if gen_mode == "midi" else mode
-        db.upsert_request(con, {"id": rid, "mode": "prompt" if job_mode in ("adjust", "companion", "midi") else job_mode,
+        db.upsert_request(con, {"id": rid, "mode": "prompt" if job_mode in ("adjust", "companion", "midi", "melody") else job_mode,
                                 "raw_text": text, "overrides": overrides, "status": "queued",
                                 "parent_loop_id": parent_loop_id, "session_id": session_id})
         spawn_job(rid, text, overrides, job_mode, parent, candidates, session_id)
@@ -170,6 +177,19 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
                 overrides = {"instrument_type": body.kind, "genre": loop["genre"], "bpm": loop["bpm"], "bars": loop["bars"],
                              "key": {"tonic": loop["key_tonic"], "mode": loop["key_mode"]}, "generation_mode": "composed"}
             rid = _launch(con, text=text, mode="companion", overrides=overrides, parent_loop_id=lid)
+        return {"request_id": rid}
+
+    @app.post("/v1/loops/{lid}/melody", status_code=202, dependencies=[Depends(auth)])
+    async def melody(lid: str, body: MelodyRequest):
+        with conn() as con:
+            loop = db.get_loop(con, lid)
+            if not loop:
+                raise HTTPException(404)
+            overrides = {"text": body.text}
+            if body.instrument_type:
+                overrides["instrument_type"] = body.instrument_type
+            rid = _launch(con, text=f"Melody{(' on ' + body.instrument_type.replace('_', ' ')) if body.instrument_type else ''} for this loop{(': ' + body.text) if body.text else ''}",
+                          mode="melody", overrides=overrides, parent_loop_id=lid)
         return {"request_id": rid}
 
     @app.get("/v1/sessions", dependencies=[Depends(auth)])

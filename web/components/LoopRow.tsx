@@ -14,7 +14,8 @@ export function LoopRow({ loop, queue, onChange, showDate = true }: { loop: Loop
   const playing = isCurrent && s.playing;
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
-  const [menu, setMenu] = useState<"" | "vary" | "add">("");
+  const [menu, setMenu] = useState<"" | "vary" | "add" | "melody">("");
+  const [melodyText, setMelodyText] = useState("");
   const midiOnly = loop.provider === "midi";
   const ops = (loop.conform_ops || {}) as { time_ratio?: number; key_shift?: number; tuning_cents_in?: number };
   const raw = (loop.analysis_raw || {}) as { tempo?: { bpm?: number }; key?: { tonic?: string; mode?: string }; purity?: number; harmony?: { mean?: number } | null };
@@ -34,6 +35,10 @@ export function LoopRow({ loop, queue, onChange, showDate = true }: { loop: Loop
   const add = async (kind: string) => {
     setMenu(""); const { request_id } = await api.companion(loop.id, kind);
     jobsStore.track(request_id, `${kind === "drums" ? "Drums" : instrumentName(kind)} for ${loopTitle(loop)}`);
+  };
+  const melody = async (kind: string) => {
+    setMenu(""); const { request_id } = await api.melody(loop.id, kind === "same" ? "" : kind, melodyText.trim()); setMelodyText("");
+    jobsStore.track(request_id, `Melody${kind === "same" ? "" : " on " + instrumentName(kind).toLowerCase()} for ${loopTitle(loop)}`);
   };
   // Chrome: drag the WAV straight to Finder/desktop (and DAWs that accept file drops).
   const onDrag = (e: React.DragEvent) => {
@@ -76,6 +81,16 @@ export function LoopRow({ loop, queue, onChange, showDate = true }: { loop: Loop
         {menu === "vary" && (
           <div className="mt-2 flex gap-1 text-xs">{(["subtle", "medium", "bold"] as const).map((k) => <button key={k} className="chip" onClick={() => vary(k)}>{k}</button>)}<button className="chip" onClick={() => setMenu("")}>cancel</button></div>
         )}
+        {menu === "melody" && (
+          <div className="mt-2 space-y-2 text-xs">
+            <input className="inp w-full" placeholder="Direction (optional): sparse and singable · climb into bar 6 · bluesy" value={melodyText} onChange={(e) => setMelodyText(e.target.value)} />
+            <div className="flex flex-wrap gap-1">
+              <button className="chip" onClick={() => melody("same")}>Same instrument</button>
+              {COMPANIONS.filter(([k]) => k !== "drums" && k !== loop.instrument_type).map(([k, l]) => <button key={k} className="chip" onClick={() => melody(k)}>{l}</button>)}
+              <button className="chip" onClick={() => setMenu("")}>cancel</button>
+            </div>
+          </div>
+        )}
         {menu === "add" && (
           <div className="mt-2 flex flex-wrap gap-1 text-xs">{COMPANIONS.filter(([k]) => k !== loop.instrument_type).map(([k, l]) => <button key={k} className="chip" onClick={() => add(k)}>{l}</button>)}<button className="chip" onClick={() => setMenu("")}>cancel</button></div>
         )}
@@ -83,6 +98,7 @@ export function LoopRow({ loop, queue, onChange, showDate = true }: { loop: Loop
       <div className="flex items-center gap-1">
         <button disabled={busy} className={`btn btn-ghost text-base ${loop.kept ? "text-ember" : "text-dust"}`} aria-pressed={!!loop.kept} aria-label={loop.kept ? "Unlike" : "Like"} onClick={like}>{loop.kept ? "♥" : "♡"}</button>
         {!midiOnly && <button className="btn btn-ghost text-xs" title="More like this" onClick={() => setMenu(menu === "vary" ? "" : "vary")}>Vary</button>}
+        {!midiOnly && loop.category !== "drums" && <button className="btn btn-ghost text-xs" title="Write a melody over this loop" onClick={() => setMenu(menu === "melody" ? "" : "melody")}>Melody</button>}
         {!midiOnly && <button className="btn btn-ghost text-xs" title="Add a companion part" onClick={() => setMenu(menu === "add" ? "" : "add")}>Add</button>}
         {loop.midi_path && <a className="btn btn-ghost text-xs" href={api.downloadUrl(loop.id, "midi")}>MIDI</a>}
         {!midiOnly && <a className="btn" href={api.downloadUrl(loop.id, "wav")}>WAV</a>}

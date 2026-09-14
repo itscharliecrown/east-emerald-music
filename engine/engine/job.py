@@ -107,11 +107,25 @@ def run_request(
                parent_loop_id=(parent or {}).get("id"))
     t_gpu = 0.0
     try:
-        # --- spec: from Claude, or inherited verbatim for variations
-        if mode == "variation" and parent and parent.get("spec"):
+        # --- spec: from Claude, or inherited verbatim for variations / melodies
+        melody = None
+        if mode in ("variation", "melody") and parent and parent.get("spec"):
             spec = LoopSpec.model_validate(parent["spec"])
             spec.generation_mode = "composed"
             intent_model, usage = None, None
+            if mode == "melody":
+                from engine.compose.melody import compose_melody
+                if not spec.harmony:
+                    raise RuntimeError("melody needs a loop with a chord progression")
+                lead = overrides.get("instrument_type") or spec.instrument.type
+                spec.instrument.type = lead
+                spec.instrument.family = {"rhodes": "keys", "wurlitzer": "keys"}.get(lead, "guitar" if "guitar" in lead or lead == "jazz_archtop" else "piano")
+                spec.instrument.techniques = ["single-note melody line", "expressive phrasing"]
+                spec.variants = []
+                job.update(status="composing")
+                melody = compose_melody(spec, instruction=str(overrides.get("text", "")))
+                intent_model, usage = "claude-opus-5", melody.usage
+                job.update(melody=melody.description, melody_fixes=melody.fixes)
         else:
             intent = parse_intent(text, overrides=overrides, parent=parent)
             spec, intent_model, usage = intent.spec, intent.model, intent.usage
@@ -124,7 +138,24 @@ def run_request(
 
         # --- seed audio: composed MIDI render, or the parent loop for variations
         composition, midi_rel, seed_audio, noise = None, None, None, None
-        if mode == "variation" and parent:
+        if mode == "melody" and melody is not None:
+            from engine.compose.midi import write_midi
+            from engine.compose.render import render_midi
+            mdir = data_root / "midi" / request_id
+            mdir.mkdir(parents=True, exist_ok=True)
+            prog = {"rhodes": 4, "wurlitzer": 5, "nylon_guitar": 24, "steel_acoustic_guitar": 25, "jazz_archtop": 26,
+                    "clean_electric_guitar": 27}.get(spec.instrument.type, 0)
+            midi_path = write_midi(melody.notes, spec, mdir / "melody.mid", program=prog, pedal=False, name="melody")
+            ctx = write_midi(melody.notes, spec, mdir / "melody_seed.mid", with_context=True, program=prog, pedal=False, name="melody")
+            seed_audio = render_midi(ctx, mdir / "melody_seed.wav")
+            n = int(round(spec.generate_seconds * 44100))
+            seed_audio = np.pad(seed_audio, ((0, 0), (0, max(0, n - seed_audio.shape[1]))))[:, :n]
+            seed_audio = (seed_audio / (float(np.abs(seed_audio).max()) + 1e-9) * 0.5).astype(np.float32)
+            midi_rel = str(midi_path.relative_to(data_root))
+            noise = float(overrides.get("init_noise_level") or 0.4)
+            known_grid = True
+            job.update(midi_path=midi_rel)
+        elif mode == "variation" and parent:
             seed_audio = _loop_context_audio(data_root / parent["wav_path"], spec)
             noise = STRENGTH_NOISE.get(str(overrides.get("strength", "medium")), 0.5)
             midi_rel = parent.get("midi_path")
@@ -152,7 +183,11 @@ def run_request(
         batches = 0
         while batches < max_batches and len(passed) < 2:
             batches += 1
-            prompts = compile_prompts(spec)[:candidates]
+            if mode == "melody":
+                from engine.compose.melody import melody_prompt
+                prompts = [melody_prompt(spec)] * candidates
+            else:
+                prompts = compile_prompts(spec)[:candidates]
             t0 = time.time()
             req = GenerateRequest(prompts=prompts, duration_s=spec.generate_seconds)
             if seed_audio is not None:
@@ -170,10 +205,11 @@ def run_request(
                 res = conform_clip(spec, clip.audio, clip.sr, a, purity=pur, vocal_share=shares.get("vocals", 0.0),
                                    known_grid=known_grid)
                 harmony = None
-                if composition is not None and res.loop is not None:
+                if (composition is not None or mode == "melody") and res.loop is not None:
                     from engine.compose.harmony_check import harmony_similarity
                     harmony = harmony_similarity(res.loop, clip.sr, spec)
-                    if harmony["mean"] < 0.75 or harmony["min"] < 0.5:
+                    lo_mean, lo_min = (0.55, 0.3) if mode == "melody" else (0.75, 0.5)   # a single line has sparse chroma
+                    if harmony["mean"] < lo_mean or harmony["min"] < lo_min:
                         res.gate.passed = False
                         res.gate.reasons.append("harmony_drift")
                         res.loop = None
@@ -183,7 +219,7 @@ def run_request(
                 write_raw_flac(raw_path, clip.audio, clip.sr)
                 rec["raw_path"] = str(raw_path.relative_to(data_root))
                 if res.loop is not None:
-                    fname = loop_filename(spec, id4=rec["id"][:4])
+                    fname = loop_filename(spec, descriptor="Melody" if mode == "melody" else None, id4=rec["id"][:4])
                     wav_path = data_root / "loops" / fname
                     write_wav24(wav_path, res.loop, clip.sr)
                     rec.update({"filename": fname, "wav_path": str(wav_path.relative_to(data_root)), "peaks": _peaks(res.loop)})

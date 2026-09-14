@@ -20,6 +20,7 @@ export function JobsTray() {
               <button className="ml-auto text-xs text-dust hover:text-paper" onClick={() => jobsStore.dismiss(j.id)}>dismiss</button>
             </div>
             {j.error && <p className="mt-1 text-xs text-ember">{j.error}</p>}
+            {j.state?.melody && <p className="mt-1 max-w-prose text-xs text-dust">{j.state.melody}</p>}
             {passed.length > 0 && <div className="mt-2 divide-y divide-line/60">{passed.map((l) => <LoopRow key={l.id} loop={l} queue={passed} showDate={false} />)}</div>}
           </div>
         );

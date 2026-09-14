@@ -29,7 +29,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export type Loop = {
-  id: string; request_id: string; candidate_index: number; status: "passed" | "rejected";
+  id: string; request_id: string; candidate_index: number; status: "passed" | "rejected"; category?: string;
   reject_reasons: string[]; instrument_type: string; instrument_family: string; genre: string; moods: string[];
   key_tonic: string; key_mode: string; bpm: number; bars: number; time_signature: string; filename?: string;
   gen_prompt: string; seed: number; score: number; peaks?: number[]; kept?: number | null; stars?: number | null;
@@ -40,7 +40,7 @@ export type Loop = {
 export type RequestState = {
   id: string; status: string; error?: string; raw_text: string; llm_usage?: Record<string, unknown>;
   gpu_seconds?: number; batches_run?: number; loops: Loop[];
-  voicings?: string[];
+  voicings?: string[]; melody?: string | null; melody_fixes?: string[] | null;
   spec?: { assumptions?: string[]; pushback?: string; generation_mode?: string; harmony?: { rationale?: string; complexity?: string; pattern?: string; progression?: { degree: string; quality: string; beats: number }[] }; key?: { tonic: string; mode: string }; bpm?: number; bars?: number; genre?: string; instrument?: { type: string } };
   warnings?: Record<string, string[]>;
 };
@@ -59,6 +59,7 @@ export const api = {
   sessions: (liked = false) => call<{ sessions: Session[] }>(`/v1/sessions?liked=${liked}`),
   sessionZipUrl: (id: string, liked = true) => { const { url, token } = getConfig(); return `${url}/v1/sessions/${id}/download?liked=${liked}&token=${encodeURIComponent(token)}`; },
   variation: (id: string, strength: "subtle" | "medium" | "bold") => call<{ request_id: string }>(`/v1/loops/${id}/variations`, { method: "POST", body: JSON.stringify({ strength }) }),
+  melody: (id: string, instrument_type = "", text = "") => call<{ request_id: string }>(`/v1/loops/${id}/melody`, { method: "POST", body: JSON.stringify({ instrument_type, text }) }),
   companion: (id: string, kind: string, text = "") => call<{ request_id: string }>(`/v1/loops/${id}/companion`, { method: "POST", body: JSON.stringify({ kind, text }) }),
   requests: () => call<{ requests: RequestSummary[] }>("/v1/requests?limit=100"),
   health: () => call<{ ok: boolean; loops: number }>("/v1/health"),
