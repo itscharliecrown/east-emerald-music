@@ -29,7 +29,7 @@ secrets = [modal.Secret.from_name("ee-secrets")]
 
 image = (
     modal.Image.from_registry("nvidia/cuda:12.6.3-devel-ubuntu22.04", add_python="3.11")
-    .apt_install("git", "ffmpeg", "fluidsynth", "libsndfile1", "libsndfile1-dev", "libsamplerate0-dev",
+    .apt_install("git", "ffmpeg", "fluidsynth", "fluid-soundfont-gm", "libsndfile1", "libsndfile1-dev", "libsamplerate0-dev",
                  "libfftw3-dev", "meson", "ninja-build", "pkg-config", "wget", "bzip2")
     # Ubuntu 22.04 ships Rubber Band 2 (no R3 engine). Build 3.3.0 from source (~1 min).
     .run_commands(
@@ -45,7 +45,7 @@ image = (
     .pip_install(f"git+{SA3_REPO}@{SA3_COMMIT}")
     .pip_install(
         "scipy", "soundfile", "librosa", "pyloudnorm", "pydantic>=2.7", "pyyaml",
-        "git+https://github.com/CPJKU/beat_this.git", "demucs", "fastapi[standard]", "anthropic",
+        "git+https://github.com/CPJKU/beat_this.git", "demucs", "fastapi[standard]", "anthropic", "pretty_midi",
     )
     .env({"HF_HOME": HF_CACHE, "HF_HUB_ENABLE_HF_TRANSFER": "0", "TORCH_HOME": f"{HF_CACHE}/torch"})
     .add_local_dir("migrations", remote_path="/root/migrations")
@@ -168,9 +168,16 @@ class Engine:
 
             def generate(self_, req):
                 import secrets as _s
+
+                import torch
                 seeds = req.seeds or [_s.randbits(31) for _ in req.prompts]
+                kw = {}
+                if req.init_audio is not None:
+                    sr, arr = req.init_audio
+                    kw["init_audio"] = (sr, torch.tensor(arr))
+                    kw["init_noise_level"] = req.init_noise_level if req.init_noise_level is not None else 0.45
                 t0 = time.time()
-                outs = engine._run(req.prompts, req.duration_s, seeds, req.steps)
+                outs = engine._run(req.prompts, req.duration_s, seeds, req.steps, **kw)
                 per = (time.time() - t0) / len(req.prompts)
                 return [RawClip(audio=o, sr=44100, prompt=p, seed=s, provider=self_.name,
                                 model_revision=engine.revision, duration_s=req.duration_s, steps=req.steps,

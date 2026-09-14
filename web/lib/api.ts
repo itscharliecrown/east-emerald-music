@@ -34,13 +34,14 @@ export type Loop = {
   key_tonic: string; key_mode: string; bpm: number; bars: number; time_signature: string; filename?: string;
   gen_prompt: string; seed: number; score: number; peaks?: number[]; kept?: number | null; stars?: number | null;
   favorite?: number; conform_ops?: Record<string, unknown>; analysis_raw?: Record<string, unknown>;
-  analysis_final?: Record<string, unknown>; created_at: string;
+  analysis_final?: Record<string, unknown>; created_at: string; midi_path?: string | null; init_noise_level?: number | null;
 };
 
 export type RequestState = {
   id: string; status: string; error?: string; raw_text: string; llm_usage?: Record<string, unknown>;
   gpu_seconds?: number; batches_run?: number; loops: Loop[];
-  spec?: { assumptions?: string[]; pushback?: string; harmony?: { rationale?: string; progression?: { degree: string; quality: string; beats: number }[] }; key?: { tonic: string; mode: string }; bpm?: number; bars?: number; genre?: string; instrument?: { type: string } };
+  voicings?: string[];
+  spec?: { assumptions?: string[]; pushback?: string; generation_mode?: string; harmony?: { rationale?: string; complexity?: string; pattern?: string; progression?: { degree: string; quality: string; beats: number }[] }; key?: { tonic: string; mode: string }; bpm?: number; bars?: number; genre?: string; instrument?: { type: string } };
   warnings?: Record<string, string[]>;
 };
 

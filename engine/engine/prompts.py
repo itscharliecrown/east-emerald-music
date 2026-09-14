@@ -44,7 +44,7 @@ _TEXTURE_PHRASE: dict[str, tuple[str, str, str]] = {
 MAX_TECHNIQUES = 3
 MAX_MOODS = 3
 MAX_CHAIN = 3
-MAX_WORDS = 70
+MAX_WORDS = 80
 
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -104,6 +104,19 @@ def genre_parts(spec: LoopSpec) -> tuple[str, list[str]]:
     return f"Genre: {spec.genre}", []
 
 
+def harmony_phrase(spec: LoopSpec) -> str:
+    """Words the encoder can act on. Chord symbols mean nothing to it; chord *character* does."""
+    if not spec.harmony:
+        return ""
+    quals = " ".join(c.quality for c in spec.harmony.progression).lower()
+    rich = any(q in quals for q in ("9", "11", "13", "maj7", "#11", "b9"))
+    if spec.harmony.complexity == "complex" or rich:
+        return "rich jazzy extended chords with ninths and major sevenths, smooth voice leading"
+    if spec.harmony.complexity == "medium" or "7" in quals:
+        return "warm seventh chords, smooth voice leading"
+    return "simple open triads"
+
+
 def instrument_prompt(spec: LoopSpec, variant: Variant | None = None) -> str:
     inst = spec.instrument
     # Variants ADD to the base description; they never drop the musical instruction.
@@ -123,6 +136,7 @@ def instrument_prompt(spec: LoopSpec, variant: Variant | None = None) -> str:
         "Format: Solo",
         genre_tag,
         f"{body} {key_phrase(spec)}",
+        harmony_phrase(spec),
         _feel_phrase(spec),
         ", ".join(moods) if moods else "",
         _join(chain),

@@ -67,10 +67,20 @@ class Chord(BaseModel):
     note: str = ""
 
 
+Complexity = Literal["basic", "medium", "complex"]
+Pattern = Literal["sustained", "broken", "arpeggio", "stabs", "fingerstyle", "strum"]
+
+
 class Harmony(BaseModel):
     progression: list[Chord]
+    complexity: Complexity = "medium"
+    pattern: Pattern = "sustained"
     harmonic_rhythm: str = ""
     rationale: str = ""
+
+    def symbols(self, key: "Key") -> list[str]:
+        from engine.compose.theory import chord_symbol
+        return [chord_symbol(c, key) for c in self.progression]
 
 
 class Variant(BaseModel):
@@ -87,6 +97,7 @@ class TextureSuggestion(BaseModel):
 
 class LoopSpec(BaseModel):
     category: Category = "instrument"
+    generation_mode: Literal["prompt", "composed"] = "prompt"
     instrument: Instrument
     genre: str
     moods: list[str] = Field(default_factory=list)

@@ -16,7 +16,7 @@ export function CandidateCard({ loop, index, onChange, onRefine, warnings = [] }
 
   const passed = loop.status === "passed";
   const ops = (loop.conform_ops || {}) as { time_ratio?: number; semitones?: number; key_shift?: number; tuning_cents_in?: number; seam_score?: number };
-  const raw = (loop.analysis_raw || {}) as { tempo?: { bpm?: number }; key?: { tonic?: string; mode?: string; strength?: number }; purity?: number };
+  const raw = (loop.analysis_raw || {}) as { tempo?: { bpm?: number }; key?: { tonic?: string; mode?: string; strength?: number }; purity?: number; harmony?: { mean?: number; min?: number } | null };
   const corrections: string[] = [];
   if (ops.time_ratio && Math.abs(ops.time_ratio - 1) > 0.002) corrections.push(`stretched ${((ops.time_ratio - 1) * 100).toFixed(1)}%`);
   if (ops.key_shift) corrections.push(`shifted ${ops.key_shift > 0 ? "+" : ""}${ops.key_shift} st`);
@@ -44,7 +44,7 @@ export function CandidateCard({ loop, index, onChange, onRefine, warnings = [] }
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
             <button className="btn" onClick={() => play(loop.id, api.audioUrl(loop.id), { bpm: loop.bpm, click })}>{playing ? "■ stop" : "▶ loop"}</button>
             <label className="flex items-center gap-1 opacity-70"><input type="checkbox" checked={click} onChange={(e) => setClick(e.target.checked)} /> click</label>
-            <span className="opacity-50">got {fmt(raw.tempo?.bpm)} BPM · {raw.key?.tonic}{raw.key?.mode === "minor" ? "min" : "maj"} ({fmt(raw.key?.strength, 2)}) · purity {fmt(raw.purity, 2)}</span>
+            <span className="opacity-50">got {fmt(raw.tempo?.bpm)} BPM · {raw.key?.tonic}{raw.key?.mode === "minor" ? "min" : "maj"} ({fmt(raw.key?.strength, 2)}) · purity {fmt(raw.purity, 2)}{raw.harmony && ` · harmony ${fmt(raw.harmony.mean, 2)}`}</span>
             {corrections.length > 0 && <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-amber-200">{corrections.join(" · ")}</span>}
             {warnings.map((w) => <span key={w} className="rounded bg-white/10 px-1.5 py-0.5 opacity-70">{w}</span>)}
           </div>
@@ -55,6 +55,7 @@ export function CandidateCard({ loop, index, onChange, onRefine, warnings = [] }
             <button disabled={busy} className={`btn ${loop.favorite ? "bg-pink-800!" : ""}`} onClick={() => patch({ favorite: !loop.favorite })}>♥</button>
             <a className="btn" href={api.downloadUrl(loop.id, "wav")}>↓ WAV</a>
             <a className="btn" href={api.downloadUrl(loop.id, "raw")}>↓ raw</a>
+            {loop.midi_path && <a className="btn" href={api.downloadUrl(loop.id, "midi")}>↓ MIDI</a>}
             {onRefine && <button className="btn" onClick={() => onRefine(loop, "companion")}>+ companion</button>}
           </div>
           {loop.filename && <div className="mt-1 font-mono text-[10px] opacity-40">{loop.filename}</div>}

@@ -85,6 +85,7 @@ def build_app(*, data_root: Path, spawn_job, wake, reload_volume) -> FastAPI:
         out = db.get_request(con, rid)
         if out:
             out["warnings"] = {l["id"]: l.get("warnings", []) for l in j.get("loops", [])}
+            out["voicings"] = j.get("voicings")
         return out
 
     @app.get("/v1/health")

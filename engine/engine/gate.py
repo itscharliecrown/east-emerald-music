@@ -34,7 +34,9 @@ class GateResult:
 
 
 def evaluate(spec: LoopSpec, a: Analysis, *, t: Thresholds = Thresholds(), purity: float | None = None,
-             vocal_share: float | None = None) -> GateResult:
+             vocal_share: float | None = None, known_grid: bool = False) -> GateResult:
+    """known_grid: Composed mode. The audio is time-locked to a MIDI seed, so tempo and key are
+    given, not measured; the harmony_drift check (job.py) replaces the key gate."""
     r = GateResult(passed=True)
 
     if a.silent_bars > 0:
@@ -43,6 +45,16 @@ def evaluate(spec: LoopSpec, a: Analysis, *, t: Thresholds = Thresholds(), purit
         # Warning until calibrated by ear: driven Wurlitzer / compressed house piano may be
         # legitimately flat-topped by the model's "saturation" rendering (Phase 0, 2026-09-12).
         r.warnings.append("clipping")
+
+    if known_grid:
+        if purity is not None and purity < t.stem_min_purity:
+            r.reasons.append("stem_bleed")
+        if vocal_share is not None and vocal_share >= t.vocal_max_share:
+            r.reasons.append("vocal_texture")
+        if a.stereo_correlation < t.mono_min_correlation:
+            r.warnings.append("mono_risk")
+        r.passed = not r.reasons
+        return r
 
     if spec.feel.rhythmic and a.tempo.bpm > 0:
         err = a.tempo.error_pct(spec.bpm)

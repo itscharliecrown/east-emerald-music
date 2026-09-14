@@ -34,7 +34,7 @@ def test_word_budget_and_dedupe():
     s.instrument.techniques = [f"technique number {i} with many extra words" for i in range(8)]
     s.moods = ["warm", "Warm", "dusty", "hazy", "soft"]
     p = instrument_prompt(s)
-    assert len(p.split()) <= 70
+    assert len(p.split()) <= 80
     assert p.lower().count("warm") == 1
 
 

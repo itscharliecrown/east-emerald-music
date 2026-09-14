@@ -29,7 +29,15 @@ WHAT YOU DECIDE
 - feel.swing_pct: 50 straight; lo-fi/neo-soul 55-62; boom bap 54-60.
 - leave_low_end: true for hip hop, lo-fi, R&B, trap contexts.
 - production: recording chain and space as concrete sonic words. Never hype words.
-- harmony: a progression with degrees, qualities, beats summing exactly to bars × beats per bar, and a rationale. Every loop needs a turnaround: the final chord pulls back to bar 1 (V, V7sus, bVII, iv, split ii-V, or a suspension). 8-bar loops vary bars 7-8. Prefer voice leading, extensions (9, maj7, 6, 13), borrowed chords, and suspensions over stock I-V-vi-IV.
+- harmony: a progression with degrees, qualities, beats summing exactly to bars × beats per bar, and a rationale. Every loop needs a turnaround: the final chord pulls back to bar 1 (V, V7sus, bVII, iv, split ii-V, or a suspension). 8-bar loops vary bars 7-8.
+  - harmony.complexity follows overrides.complexity (default medium):
+    basic = triads and the occasional 7th, 1 chord per bar, diatonic only, a stock but strong loop (i-VI-III-VII, I-V-vi-IV feel).
+    medium = 7ths and 9ths on most chords, one borrowed chord or suspension, voice-led, harmonic rhythm may split a bar.
+    complex = extended and altered chords (m9, m11, maj7#11, 13, 7b9, 7sus4), borrowed chords, chromatic or tritone-sub approaches, split-bar ii-V, deceptive resolutions. Still singable on top. Example in E minor: im9 · ivm7 · bVIImaj7 · bVImaj7 · v7sus4.
+  - Numerals: accidentals are relative to the major scale (bVII in E minor = D). Qualities from: maj, m, 6, m6, add9, sus2, sus4, maj7, m7, 7, dim7, m7b5, mmaj7, 7sus4, maj9, m9, 9, 9sus4, m11, 11, maj7#11, 13, m13, 13sus4, 7b9, 7#9, 7b13, 6/9, m6/9.
+  - harmony.pattern: sustained | broken (lo-fi comping) | arpeggio | stabs (house) | fingerstyle (guitar) | strum (guitar).
+  - If overrides.progression is given (chord symbols or numerals), transcribe it faithfully into degrees/qualities in the requested key. Fill beats evenly unless durations are given.
+- generation_mode: copy overrides.generation_mode (prompt | composed). In composed mode the harmony plan is rendered to MIDI and the audio model re-voices it, so the progression is exact. In prompt mode the progression only flavors the description.
 - variants: exactly 4. Each changes one or two axes from the base: register (voicing height), articulation (broken vs sustained vs arpeggiated), recording (chain/space), intensity (mood_override, density). Variants ADD to the base techniques.
 - texture_suggestions: if the producer asks for vinyl crackle, tape hiss, rain, room tone, etc., do NOT put it in the instrument prompt. Suggest it as a separate texture loop (types: vinyl_crackle, tape_hiss, room_tone, rain).
 - assumptions: list every default you filled in, in plain words.
@@ -46,6 +54,93 @@ HARD RULES
 - UI overrides always win over the text.
 - Chord symbols the producer writes are accepted into harmony, but note in assumptions that exact chords are guaranteed only in Composed mode.
 - Mood words are concrete and sonic (warm, dusty, intimate, bittersweet, floating), never "amazing" or "high quality"."""
+
+
+# Lean mirror of LoopSpec for structured outputs. The API rejects schemas with many enums and
+# numeric constraints ("Schema is too complex"), so Claude fills plain strings and numbers and
+# LoopSpec.model_validate() enforces the real rules afterwards.
+from pydantic import BaseModel, Field
+
+
+class _Instrument(BaseModel):
+    family: str
+    type: str
+    techniques: list[str]
+    range_: str = Field(alias="register")
+    model_config = {"populate_by_name": True}
+
+
+class _Key(BaseModel):
+    tonic: str
+    mode: str
+
+
+class _Feel(BaseModel):
+    rhythmic: bool
+    swing_pct: float
+    half_time: bool
+    static: bool
+
+
+class _Production(BaseModel):
+    space: str
+    chain: list[str]
+
+
+class _Chord(BaseModel):
+    degree: str
+    quality: str
+    beats: float
+    borrowed: bool
+
+
+class _Harmony(BaseModel):
+    progression: list[_Chord]
+    complexity: str
+    pattern: str
+    rationale: str
+
+
+class _Variant(BaseModel):
+    axis: str
+    techniques: list[str]
+    chain: list[str]
+    mood_override: str
+
+
+class _Texture(BaseModel):
+    type: str
+    reason: str
+
+
+class IntentOut(BaseModel):
+    category: str
+    generation_mode: str
+    instrument: _Instrument
+    genre: str
+    moods: list[str]
+    key: _Key
+    bpm: float
+    time_signature: str
+    bars: int
+    feel: _Feel
+    leave_low_end: bool
+    production: _Production
+    harmony: _Harmony
+    variants: list[_Variant]
+    texture_suggestions: list[_Texture]
+    assumptions: list[str]
+    pushback: str
+
+
+def _to_spec(out: IntentOut) -> LoopSpec:
+    d = out.model_dump(by_alias=True)
+    for v in d["variants"]:
+        if not v.get("mood_override"):
+            v["mood_override"] = None
+    if not d["harmony"]["progression"]:
+        d["harmony"] = None
+    return LoopSpec.model_validate(d)
 
 
 @dataclass
@@ -86,20 +181,24 @@ def parse_intent(
             thinking={"type": "adaptive"},
             output_config={"effort": effort},
             messages=[{"role": "user", "content": content}],
-            output_format=LoopSpec,
+            output_format=IntentOut,
         )
 
     resp = call()
-    if resp.parsed_output is None:
-        # One retry with the validation error attached (PRD §7.1).
-        text_block = next((b.text for b in resp.content if b.type == "text"), "")
+    spec: LoopSpec | None = None
+    err = ""
+    for attempt in range(2):
         try:
-            LoopSpec.model_validate_json(text_block)
+            if resp.parsed_output is None:
+                raise ValueError("no parsed output")
+            spec = _to_spec(resp.parsed_output)
+            break
         except Exception as e:  # noqa: BLE001
-            resp = call(str(e)[:1500])
-    spec = resp.parsed_output
+            err = str(e)[:1500]
+            if attempt == 0:
+                resp = call(err)   # one retry with the validation error attached (PRD §7.1)
     if spec is None:
-        raise RuntimeError("intent: Claude did not return a valid LoopSpec after retry")
+        raise RuntimeError(f"intent: no valid LoopSpec after retry: {err}")
     if overrides:
         spec = _apply_overrides(spec, overrides)
     usage = resp.usage.to_dict() if hasattr(resp.usage, "to_dict") else dict(resp.usage)
@@ -109,9 +208,13 @@ def parse_intent(
 def _apply_overrides(spec: LoopSpec, overrides: dict) -> LoopSpec:
     """UI overrides win, even if the model ignored them (PRD §7.1)."""
     data = spec.model_dump(by_alias=True)
-    for k in ("bpm", "bars", "time_signature", "genre"):
+    for k in ("bpm", "bars", "time_signature", "genre", "generation_mode"):
         if overrides.get(k) is not None:
             data[k] = overrides[k]
+    if overrides.get("complexity") and data.get("harmony"):
+        data["harmony"]["complexity"] = overrides["complexity"]
+    if overrides.get("pattern") and data.get("harmony"):
+        data["harmony"]["pattern"] = overrides["pattern"]
     if overrides.get("key"):
         data["key"] = overrides["key"]
     if overrides.get("instrument_type"):

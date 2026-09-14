@@ -74,20 +74,47 @@ def run_request(
         passed: list[dict] = []
         rejected: list[dict] = []
         batches = 0
+        composition = None
+        midi_rel = None
+        if spec.generation_mode == "composed" and spec.harmony:
+            from engine.compose.pipeline import compose
+            job.update(status="composing")
+            comp_dir = data_root / "midi" / request_id
+            composition = compose(spec, comp_dir, seed=secrets.randbits(16))
+            midi_rel = str(composition.midi_path.relative_to(data_root))
+            job.update(midi_path=midi_rel, voicings=[v.symbol for v in composition.voicings])
         while batches < max_batches and len(passed) < 2:
             batches += 1
             prompts = compile_prompts(spec)[:candidates]
             t0 = time.time()
-            clips = generator.generate(GenerateRequest(prompts=prompts, duration_s=spec.generate_seconds))
+            if composition is not None:
+                # Timbre transfer: keep the notes, change the instrument (SA3 guide: 0.4 typical).
+                noise = float((overrides or {}).get("init_noise_level") or 0.45)
+                clips = generator.generate(GenerateRequest(
+                    prompts=prompts, duration_s=spec.generate_seconds,
+                    init_audio=(44100, composition.seed_audio), init_noise_level=noise))
+            else:
+                clips = generator.generate(GenerateRequest(prompts=prompts, duration_s=spec.generate_seconds))
             t_gpu += time.time() - t0
             job.update(status="conforming", batches_run=batches)
             for k, clip in enumerate(clips):
                 idx = (batches - 1) * candidates + k
                 t0 = time.time()
-                a = analyze(clip.audio, clip.sr, target_bpm=spec.bpm, rhythmic=spec.feel.rhythmic)
+                # Composed: the grid is known, so skip beat tracking (slow, and only adds jitter).
+                a = analyze(clip.audio, clip.sr, target_bpm=spec.bpm,
+                            rhythmic=spec.feel.rhythmic and composition is None)
                 shares = stem_shares(clip.audio, clip.sr)
                 pur = purity_for(shares, spec.instrument.family)
-                res = conform_clip(spec, clip.audio, clip.sr, a, purity=pur, vocal_share=shares.get("vocals", 0.0))
+                res = conform_clip(spec, clip.audio, clip.sr, a, purity=pur, vocal_share=shares.get("vocals", 0.0),
+                                   known_grid=composition is not None)
+                harmony = None
+                if composition is not None and res.loop is not None:
+                    from engine.compose.harmony_check import harmony_similarity
+                    harmony = harmony_similarity(res.loop, clip.sr, spec)
+                    if harmony["mean"] < 0.75 or harmony["min"] < 0.5:
+                        res.gate.passed = False
+                        res.gate.reasons.append("harmony_drift")
+                        res.loop = None
                 t_gpu += time.time() - t0
                 loop_id = uuid.uuid4().hex
                 rec = {
@@ -101,7 +128,9 @@ def run_request(
                     "length_samples": spec.loop_samples if res.loop is not None else None,
                     "provider": clip.provider, "model_revision": clip.model_revision, "gen_prompt": clip.prompt,
                     "seed": clip.seed, "steps": clip.steps, "duration_s": clip.duration_s,
-                    "analysis_raw": {**a.to_dict(), "stem_shares": shares, "purity": pur},
+                    "init_noise_level": (overrides or {}).get("init_noise_level", 0.45) if composition else None,
+                    "midi_path": midi_rel,
+                    "analysis_raw": {**a.to_dict(), "stem_shares": shares, "purity": pur, "harmony": harmony},
                     "conform_ops": res.ops,
                     "analysis_final": res.analysis_final.to_dict() if res.analysis_final else None,
                     "score": res.score,

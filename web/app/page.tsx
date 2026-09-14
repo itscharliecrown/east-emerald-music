@@ -18,6 +18,11 @@ export default function Create() {
   const [mode, setMode] = useState("minor");
   const [bpm, setBpm] = useState("");
   const [bars, setBars] = useState("");
+  const [genMode, setGenMode] = useState<"prompt" | "composed">("composed");
+  const [complexity, setComplexity] = useState("medium");
+  const [pattern, setPattern] = useState("");
+  const [progression, setProgression] = useState("");
+  const [noise, setNoise] = useState("0.45");
   const [req, setReq] = useState<RequestState | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -44,6 +49,11 @@ export default function Create() {
     if (tonic) overrides.key = { tonic, mode };
     if (bpm) overrides.bpm = Number(bpm);
     if (bars) overrides.bars = Number(bars);
+    overrides.generation_mode = genMode;
+    overrides.complexity = complexity;
+    if (pattern) overrides.pattern = pattern;
+    if (progression.trim()) overrides.progression = progression.trim();
+    if (genMode === "composed") overrides.init_noise_level = Number(noise);
     try {
       const { request_id } = await api.create({ text: extra.text ?? text, overrides, parent_loop_id: extra.parent_loop_id });
       poll(request_id);
@@ -75,6 +85,28 @@ export default function Create() {
           <select className="inp" value={bars} onChange={(e) => setBars(e.target.value)}><option value="">bars: auto</option><option value="4">4 bars</option><option value="8">8 bars</option></select>
           <button className="btn ml-auto bg-emerald-700! px-4! py-2! text-sm" disabled={busy || text.trim().length < 2} onClick={() => submit()}>{busy ? "generating…" : "Generate ⌘↵"}</button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3 text-xs">
+          <span className="opacity-50">harmony</span>
+          <select className="inp" value={genMode} onChange={(e) => setGenMode(e.target.value as "prompt" | "composed")}>
+            <option value="composed">composed (exact chords + MIDI)</option>
+            <option value="prompt">prompt (free, model decides)</option>
+          </select>
+          <select className="inp" value={complexity} onChange={(e) => setComplexity(e.target.value)}>
+            <option value="basic">basic: triads</option>
+            <option value="medium">medium: 7ths + 9ths</option>
+            <option value="complex">complex: extended + borrowed</option>
+          </select>
+          <select className="inp" value={pattern} onChange={(e) => setPattern(e.target.value)}>
+            <option value="">pattern: auto</option><option value="sustained">sustained</option><option value="broken">broken (lo-fi comp)</option>
+            <option value="arpeggio">arpeggio</option><option value="stabs">stabs</option><option value="fingerstyle">fingerstyle</option><option value="strum">strum</option>
+          </select>
+          <input className="inp w-72" placeholder="chords (optional): im9 · ivm7 · bVIImaj7 · v7sus4" value={progression} onChange={(e) => setProgression(e.target.value)} />
+          {genMode === "composed" && (
+            <label className="flex items-center gap-1 opacity-70">timbre freedom
+              <input type="range" min="0.25" max="0.75" step="0.05" value={noise} onChange={(e) => setNoise(e.target.value)} /> {noise}
+            </label>
+          )}
+        </div>
       </div>
 
       {err && <div className="rounded border border-red-900 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>}
@@ -91,7 +123,9 @@ export default function Create() {
             <div className="grid gap-2 text-xs md:grid-cols-2">
               {req.spec.pushback && <div className="rounded border border-amber-900/50 bg-amber-950/20 p-2 text-amber-100"><b>Pushback:</b> {req.spec.pushback}</div>}
               {req.spec.harmony?.progression && (
-                <div className="rounded border border-white/10 p-2"><b>Harmony:</b> <span className="font-mono">{req.spec.harmony.progression.map((c) => `${c.degree}${c.quality}`).join(" · ")}</span><div className="mt-1 opacity-60">{req.spec.harmony.rationale}</div></div>
+                <div className="rounded border border-white/10 p-2"><b>Harmony ({req.spec.harmony.complexity}, {req.spec.harmony.pattern}):</b> <span className="font-mono">{req.spec.harmony.progression.map((c) => `${c.degree}${c.quality}`).join(" · ")}</span>
+                  {req.voicings && <div className="mt-1 font-mono opacity-60">{req.voicings.join(" · ")}</div>}
+                  <div className="mt-1 opacity-60">{req.spec.harmony.rationale}</div></div>
               )}
               {req.spec.assumptions && req.spec.assumptions.length > 0 && (
                 <div className="rounded border border-white/10 p-2 opacity-80"><b>Assumed:</b> {req.spec.assumptions.join(" · ")}</div>

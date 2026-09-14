@@ -39,27 +39,39 @@ def conform_clip(
     vocal_share: float | None = None,
     thresholds: Thresholds = Thresholds(),
     tempo_backend: str = "auto",
+    known_grid: bool = False,
 ) -> ConformResult:
-    gate = evaluate(spec, analysis, t=thresholds, purity=purity, vocal_share=vocal_share)
-    ops: dict = {}
+    gate = evaluate(spec, analysis, t=thresholds, purity=purity, vocal_share=vocal_share, known_grid=known_grid)
+    ops: dict = {"known_grid": known_grid}
     if not gate.passed:
         return ConformResult(None, gate, analysis, None, ops)
 
     # 1. One Rubber Band pass: tempo ratio + (key shift + tuning) in semitones.
-    time_ratio = gate.time_ratio if spec.feel.rhythmic else 1.0
-    semis = combined_semitones(gate.key_shift_semitones, analysis.tuning_cents) if spec.category == "instrument" else 0.0
+    #    Known grid (Composed): tempo and key come from the MIDI seed; only tuning is corrected.
+    time_ratio = 1.0 if known_grid or not spec.feel.rhythmic else gate.time_ratio
+    key_shift = 0 if known_grid else gate.key_shift_semitones
+    semis = combined_semitones(key_shift, analysis.tuning_cents) if spec.category == "instrument" else 0.0
     ops.update({"time_ratio": float(time_ratio), "semitones": float(semis),
-                "key_shift": gate.key_shift_semitones, "tuning_cents_in": analysis.tuning_cents})
+                "key_shift": key_shift, "tuning_cents_in": analysis.tuning_cents})
     y = rubberband(audio, sr, time_ratio=time_ratio, semitones=semis)
-
-    # 2. Re-track beats on the corrected audio.
     mono = y.mean(axis=0)
-    tempo = estimate_tempo(mono, sr, target_bpm=spec.bpm, backend=tempo_backend) if spec.feel.rhythmic else None
-    downbeats = tempo.downbeats if tempo else [i * spec.bar_seconds for i in range(int(len(mono) / sr / spec.bar_seconds))]
+
+    # 2. Downbeats: from the seed's pre-roll bar when known, else re-track the corrected audio.
+    if known_grid:
+        downbeats = [spec.bar_seconds * k for k in (1, 0, 2)]      # bar 1 first, alternatives after
+    else:
+        tempo = estimate_tempo(mono, sr, target_bpm=spec.bpm, backend=tempo_backend) if spec.feel.rhythmic else None
+        downbeats = tempo.downbeats if tempo else [i * spec.bar_seconds for i in range(int(len(mono) / sr / spec.bar_seconds))]
 
     # 3–5. Window, exact cut, tail wrap, seam fade.
     try:
-        w = find_loop_window(mono, sr, loop_samples=spec.loop_samples, bars=spec.bars, downbeats_s=downbeats)
+        if known_grid:
+            from engine.conform.window import LoopWindow, _spectral_seam
+            start = int(round(spec.bar_seconds * sr))
+            seam = _spectral_seam(mono, start, spec.loop_samples)
+            w = LoopWindow(start, seam, 1.0, seam, 1.0)
+        else:
+            w = find_loop_window(mono, sr, loop_samples=spec.loop_samples, bars=spec.bars, downbeats_s=downbeats)
     except ValueError:
         gate.passed = False
         gate.reasons.append("no_loop_window")
